@@ -1,0 +1,15 @@
+package anantak;
+
+message SlidingWindowFilterSettings {
+  
+  // name of the filter
+  optional string name = 1;
+
+  // length of sliding window in seconds
+  optional float sliding_window_length = 2;
+  
+  // frequency of states in filter in Hz
+  optional float update_frequency = 3;
+  
+}
+
