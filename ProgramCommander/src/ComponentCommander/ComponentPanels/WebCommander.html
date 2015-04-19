@@ -1,0 +1,29 @@
+<div class="ComponentPanel" id="WebCommander">
+  <div class="MessagesContainer" id="WebCommander_messages">
+    <div class="PanelHeader" id="WebCommander_header">WebCommander</div>
+    <div class="Message" id="WebCommander_status">Unknown</div>
+    <div class="Time" id="WebCommander_up_time">Unknown</div>
+    <div class="ProcessId" id="WebCommander_process_id"></div>
+    <div class="StatusString" id="WebCommander_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="WebCommander_buttons">
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="WebCommander_start">START</div>
+      <div class="ExitButton" id="WebCommander_exit">EXIT</div>
+    </div>
+  </div>
+</div>
+<script>
+  function update_WebCommander(data) {
+    $("div#WebCommander_status").text(data.status);
+    $("div#WebCommander_up_time").text(data.up_time);
+    $("div#WebCommander_process_id").text(data.process_id);
+    $("div#WebCommander_status_str").text(data.status_str);
+  }
+  $("div#WebCommander_start").click(function() {
+    send_to_server({msg: "COMMAND WebCommander start"});
+  });
+  $("div#WebCommander_exit").click(function() {
+    send_to_server({msg: "COMMAND WebCommander exit"});
+  });
+</script>

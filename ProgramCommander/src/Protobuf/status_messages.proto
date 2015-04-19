@@ -1,0 +1,16 @@
+package anantak;
+
+// Status messages are of these types: StatusQuery, StatusReply, Status.
+
+message StatusQuery {
+  required int64 query_time = 1;
+}
+
+message StatusReply {
+  required int64 query_time = 1;
+  required int64 reply_time = 2;
+  optional int64 query_reply_delay = 3;
+  optional int64 up_time = 4;
+  optional string status_str = 5;
+  optional int32 process_id = 6;
+}

@@ -1,0 +1,220 @@
+How do we 'upgrade' our existing messaging infrastructure
+
+A redesign of the messaging system is needed. When I started it was to get things working. But now
+I need to redesign this so that the network is more manageable. First, we give every component a
+single endpoint that it binds to using a publisher that it owns. So each component has a unique
+publisher. Each component subscribes to the publishers of other components. To send a message to
+another component, it will depend on the fact that the other component has subscribed to its
+publisher. To expect a message back, it will send a message with an 'address' of the component it
+is expecting to hear back from. The answering component will reply when it has a chance. So all
+communication is asynchronous. The requesting component has to keep track of the reply and relate
+it to the request that was sent before.
+
+So in the setup file, we are going to declare each component-to-component connection. Everytime a
+component sends a message it is only sent over its publisher. The message always has an address of
+the component that the message is intended for. The message also has a type of message it is. For
+example, a data queue will subscribe to several sensors. Each sensor publishes its sensor readings
+via its publisher. Each message will have a subject that the data queue will subscribe to. Other
+components could subscribe to that subject too.
+
+Each component would have many subscriptions (endpoints+subjects) and can publish its messages
+only over its endpoint but with many subjects. When a message comes over a given endpoint with a
+given subject, it will be known to have a certain type. So each 'subscription' of the component
+is then defined by pairs of endpoints and subjects. The component then has to process each message
+in its own way, some will require immediate reply, etc. At least two types of connections exist:
+
+  Continuous subscription: Such as sensor readings. Here it is important to keep track of the delay.
+  So if the incoming message is later than a certain time, it will not be processed.
+
+  Request-Reply: Such as filter asking for latest data since a time period. Data queue has to
+  provide this back on time. Requesting component keeps track of the timing delays.
+  
+Configuration-wise this implies that at startup, each component has a set of subscriptions. In the
+subscription processing loop, it just asks the question if the message is of this subscription and
+then processes it. Similarly in sending messages the component can use the configuration to put
+subjects on the messages.
+
+  Subscription {
+    name: "MachineInterface to DataQueue connection"
+    endpoint: "tcp://localhost:5551"
+    subject: "MI "
+    message_type: "MachineInterfaceMessage"
+  }
+  Subscription {
+    name: "RemoteControl to DataQueue connection"
+    endpoint: "tcp://localhost:5552"
+    subject: "RC "
+    message_type: "RemoteControlMessage"
+  }
+  Subscription {
+    name: "ProgramCommander to DataQueue StatusQuery connection"
+    endpoint: "tcp://localhost:5550"
+    subject: "StatusQuery "
+    message_type: "StatusQueryMessage"
+  }
+  Publication {
+    name: "DataQueue to ProgramCommander Status connection"
+    endpoint: "tcp://localhost:6501"
+    subject: "DataQueueStatus "
+    message_type: "DataQueueStatus"
+  }
+
+Data queue design
+
+Sensor setup design
+
+There are many sensors. Each has its settings to operate with the sensor driver. But the sensor
+interface always transmits its messages over a zmq bus to recievers. There could be multiple
+recievers. Some could be keeping history, others such as data queues would be processing data in
+real time. These would be deleting past data too. So all sensor interfaces can have a common data
+transmission mechanism.
+
+SensorInterface is the object that is communicating with the sensor hardware. All programs on the
+machine only see the SensorInterface and get the sensor readings via the DataBroadcaster object
+that is owned by the SensorInterface.
+
+There is a configuration repository of all data broadcaster settings that establishes the zmq queue
+settings. On initiation the data broadcaster gets a link to the config repository file and a name
+of the broadcaster object. Data boardcaster finds its settings and sets itself up.
+
+DataBroadcaster objects are used by sensors by composition. Sensor interface creates a protobuf
+message object. This message is passed by reference to a method of the DataBroadcaster. Broadcaster
+simply serializes the message into a string and transmits it. Broadcaster owns the transmitted
+string and is responsible for deallocating the memory.
+
+SensorInterface reuses the allocated memory of the message object rather than allocate and de-
+allocate every time a new message is to be sent. (Need to check if this is OK.)
+
+
+Algorithmic sensors
+
+A libviso2 sensor takes in image messages, maintains a set of point correspondences, and publishes
+the points correspondences as its output. A data queue will maintain the correspondences. A filter
+takes correspondences and maintains point tracks. When a track is complete, it is rolled in to the
+filter state. This is an example of an algorithm sensor, that operates on the data coming from
+another sensor and outputs its data that is stored in data queues or listened to by other sensors. 
+
+
+Historical Sensor data interface
+
+For testing it is needed that we re-transmit old recordings of the sensor data. Old recordings are
+stored as serialized messages on disk. Historical sensor gets a link to the data file/configuration
+at startup. Each message necessarily has a timestamp. Through the sensor commander interface, we
+can command many historical sensor data interfaces to start publishing their data assuming that
+start time is a timestamp in the past.
+
+Each sensor interface will run a loop at a given frequency, say 100Hz, where it will check the
+current (historical) time and timestamp of the next messages in the queue till the messages are not
+current. All current messages will be transmitted via the DataBroadcaster object.
+
+Program Commander
+
+Program Commander starts programs such as sensors, filters etc. It has the ability to check if a
+program is already running. If so, it will not start a program. What I want is to make a list of
+programs that will run on the machine, and their attributes such as: the command line to run it,
+a list of commands that can be given to it such as Stop/Die/Record etc., zmq end points for sensor
+interfaces, and so on.
+
+The ProgramCommander can use this list to start programs, node.js server can use this to build the
+web interface, programs can use this list to know which ZMQ end points they are going to use.
+
+Subscriptions and publications to be used by the ProgramCommander are as follows:
+  One connection each to each component, used to get the status of the component
+  One publication where it publishes the messages asking for status from each component
+
+Program Status and Query
+
+ProgramCommander asks for program status from the components running on the machine. For each
+component it has a subscription to its publisher from which it gets ComponentStatus messages back.
+ProgramCommander sends each component a StatusQuery message and expects to get a Status message.
+This communication is asynchronous, as all other comminucation on the machine. To enable this we
+create a class named ComponentStatusKeeper. This does the following things:
+  1. Generates a StatusQuery message when asked
+  2. Receives a StatusReply message from the component
+  3. Updates the status from the recieved StatusReply
+  4. Generates a ComponentStatus message when asked
+  5. Returns component status query frequency
+  6. Returns the next timestamp when the object query should be sent
+Specific components will derive from this class to implement their own status types. 
+
+Component Commander
+
+ComponentCommander does the following things:
+  1. At startup, the ComponentCommander loads a list of components it expects to keep track of.
+  2. Create a map of each component name and their StatusKeeperObjects.
+     Create a map of each component name and their last status timestamps set to 0.
+  3. Create a place holder for programs to startup, set to none to beging with. 
+  4. Start outer loop
+    - Create zmq transport
+    - create a map of component names and subscribers to their endpoints
+    - create publisher
+  5. Go into inner loop
+    - Check each component subscriber for a message
+    - If this is a status message, pass it to the corresponding StatusKeeperObject
+    - Ask all StatusKeepers for new polling timestamps, store in polling_timestamp_list.
+    - Check every timestamp in polling_timestamps_list, for each in the past, 
+        ask for update messages from StatusKeepers,
+        send messages
+    - Check command message subscriber for messages
+    - If this is a command message (from WebCommander), check if this is to start a program
+      - If program startup message, from the list of programs status times check if the program
+        seems to be dead. If so,
+          - setup markers to exit the inner loop
+          - store startup program message
+      - If exit message, get set to exit program
+    - sleep for a predetermined time if no startup programs are needed
+    - Exit inner loop if a program is to be started up or need to exit
+  6. Back in outer loop
+    - make sure that startup_program is not None. If not,
+      Unsubscribe from all subscribers,
+      Shut down publisher
+      Destroy ZMQ transport
+      Spawn the new process if exit is not needed
+  7. Go back to starting outer loop or exit if need to exit
+
+
+Web Commmander
+
+WebCommander will have knowledge of components it will display on the WebInterface page. This can
+be achieved simply through the ProgramsSetup file. There could be another field added to each
+program if we do not want it to be shown by the WebCommander.
+
+For each component, WebCommander will access a static div-tags-html section. This can be generated
+directly via a C++ template engine. So the StatusKeeper is able to provide the html string for the
+WebInterface page directly. WebCommander will call a function with each Program/Component name
+to get back the static html/script for the webpage.
+
+When a status message arrives from the ProgramCommander, it is usually for a specific program.
+WebCommander will call another function with the input string to get back an object with the
+message broken into its components. This will be emitted to the browser where the components will
+be updated on the webpage.
+
+The webpage elements are: tiles for the messages that be sent to the component and, display boxes
+for the status message components. Our intention is to separate the knowledge of the status from
+the WebCommander.
+
+Component
+
+Every component has a subscriber loop where one subscriber is for listening to the status queries
+from the ProgramCommander. ProgramCommander always publishes status queries directed to a component
+with the program name as the beginning address.
+
+Component begins its loop at whatever rate. It will listen to messages on the status query at the
+rate it wants to. Whenever it gets a status query, it will send it to its StatusKeeper object's
+GenerateStatusQueryReply method for processing to get back the msg string to be published via its
+publisher. It can publish immediately or whenever it can.
+
+Component Status Keeper owns all the implementation details of the status-query-reply system. All
+components use this class to generate the status queries/ replies / status itself. It would be nice
+if the presentation of the status is also implemented somehow via this class.
+
+Test Web Commander
+
+We simply want to supply a message via a C++ component and get it to update on a webpage without
+refresh. This is not a hard problem, just needs to be done.
+
+14 Dec 2014
+
+Status Query Reply system is now working. The status is displayed in realtime on the webpage.
+Components can be controlled using the webpage. 
+

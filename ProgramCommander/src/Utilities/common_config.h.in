@@ -1,0 +1,18 @@
+#pragma once
+
+#include <string>
+#include <memory>
+#include <google/protobuf/message.h>
+
+namespace anantak {
+
+inline std::string GetProjectSourceDirectory() {
+  return std::string("@PROJECT_SOURCE_DIR@");
+}
+
+typedef ::google::protobuf::Message MessageType;
+typedef ::google::protobuf::Message ConfigurationType;
+typedef std::unique_ptr<MessageType> MessagePtrType;
+
+}
+

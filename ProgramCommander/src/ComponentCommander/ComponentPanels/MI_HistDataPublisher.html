@@ -1,0 +1,29 @@
+<div class="ComponentPanel" id="MI_HistDataPublisher">
+  <div class="MessagesContainer" id="MI_HistDataPublisher_messages">
+    <div class="PanelHeader" id="MI_HistDataPublisher_header">MI_HistDataPublisher</div>
+    <div class="Message" id="MI_HistDataPublisher_status">Unknown</div>
+    <div class="Time" id="MI_HistDataPublisher_up_time">Unknown</div>
+    <div class="ProcessId" id="MI_HistDataPublisher_process_id"></div>
+    <div class="StatusString" id="MI_HistDataPublisher_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="MI_HistDataPublisher_buttons">
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="MI_HistDataPublisher_start">START</div>
+      <div class="ExitButton" id="MI_HistDataPublisher_exit">EXIT</div>
+    </div>
+  </div>
+</div>
+<script>
+  function update_MI_HistDataPublisher(data) {
+    $("div#MI_HistDataPublisher_status").text(data.status);
+    $("div#MI_HistDataPublisher_up_time").text(data.up_time);
+    $("div#MI_HistDataPublisher_process_id").text(data.process_id);
+    $("div#MI_HistDataPublisher_status_str").text(data.status_str);
+  }
+  $("div#MI_HistDataPublisher_start").click(function() {
+    send_to_server({msg: "COMMAND MI_HistDataPublisher start"});
+  });
+  $("div#MI_HistDataPublisher_exit").click(function() {
+    send_to_server({msg: "COMMAND MI_HistDataPublisher exit"});
+  });
+</script>

@@ -1,0 +1,165 @@
+html {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+body {
+  margin: 0;
+  padding: 0px 0px;
+  font-family: arial, helvetica, sans-serifarial, helvetica, sans-serif;
+  color: #333;
+  background-color: #fff;
+}
+
+
+.PanelsContainer {
+  /*border: 1px solid #CCC;*/
+  width: 100%;
+  padding:0;
+}
+
+.ComponentPanel {
+  height: 75px;
+  float:left;
+  clear:left;
+  vertical-align: top;
+  margin: 0px;
+  font: normal 12px Roboto,arial,sans-serif;
+  word-wrap: break-word;
+  border: 1px solid #CCC;
+  border-top: none;
+  width: calc(100% - 2px);
+}
+
+.MessagesContainer {
+  float: left;
+  width: calc(100% - 105px);
+}
+
+.PanelHeader {
+  background-color: #D3D3D3;
+  float: left;
+  clear: left;
+}
+
+.Message {
+  float: left;
+  padding-left: 5px;
+}
+
+.Time {
+  float: left;
+  padding-left: 5px;
+}
+
+.ProcessId {
+  float: left;
+  padding-left: 5px;
+}
+
+.StatusString {
+  float: left;
+  clear: left;
+}
+
+.ButtonsContainer {
+  float: right;
+}
+
+.ButtonsColumn {
+  width: 52px;
+  float: left;
+}
+
+.StartButton {
+  height: 20px;
+  width: 50px;
+  float: left;
+  clear: none;
+  vertical-align: middle;
+  text-align: center;
+  margin: 1px;
+  font: normal 12px Roboto,arial,sans-serif;
+  word-wrap: break-word;
+  background-color: #CCFF99;
+  cursor: pointer;
+}
+.ExitButton {
+  height: 20px;
+  width: 50px;
+  float: left;
+  clear: none;
+  vertical-align: middle;
+  text-align: center;
+  margin: 1px;
+  font: normal 12px Roboto,arial,sans-serif;
+  word-wrap: break-word;
+  background-color: #FF9999;
+  cursor: pointer;
+}
+
+.Button {
+  height: 20px;
+  width: 50px;
+  float: left;
+  clear: none;
+  vertical-align: middle;
+  text-align: center;
+  margin: 1px;
+  font: normal 12px Roboto,arial,sans-serif;
+  word-wrap: break-word;
+  cursor: pointer;
+}
+
+.Yellow {
+  background-color: #FFFF66;
+}
+.Green {
+  background-color: #66FF66;  
+}
+.Blue {
+  background-color: #00CCFF;  
+}
+.Orange {
+  background-color: #FF9900;  
+}
+.Red {
+  background-color: #FF0000;  
+}
+
+span {
+  font: normal 12px Roboto,arial,sans-serif;
+}
+
+.tile {
+  height: 50px;
+  width: 50px;
+  float: left;
+  clear: none;
+  vertical-align: top;
+  margin: 1px;
+  font: normal 12px Roboto,arial,sans-serif;
+  word-wrap: break-word;
+}
+
+.first {
+  clear: left;
+}
+
+.green {
+  background-color: #CCFF99;
+}
+
+.red {
+  background-color: #FF9999;
+}
+
+.orange {
+  background-color: #FFCC99;
+}
+
+.yellow {
+  background-color: #FFFF66;
+}
+

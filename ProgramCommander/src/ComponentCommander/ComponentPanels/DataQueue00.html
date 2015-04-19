@@ -1,0 +1,29 @@
+<div class="ComponentPanel" id="DataQueue00">
+  <div class="MessagesContainer" id="DataQueue00_messages">
+    <div class="PanelHeader" id="DataQueue00_header">DataQueue00</div>
+    <div class="Message" id="DataQueue00_status">Unknown</div>
+    <div class="Time" id="DataQueue00_up_time">Unknown</div>
+    <div class="ProcessId" id="DataQueue00_process_id"></div>
+    <div class="StatusString" id="DataQueue00_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="DataQueue00_buttons">
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="DataQueue00_start">START</div>
+      <div class="ExitButton" id="DataQueue00_exit">EXIT</div>
+    </div>
+  </div>
+</div>
+<script>
+  function update_DataQueue00(data) {
+    $("div#DataQueue00_status").text(data.status);
+    $("div#DataQueue00_up_time").text(data.up_time);
+    $("div#DataQueue00_process_id").text(data.process_id);
+    $("div#DataQueue00_status_str").text(data.status_str);
+  }
+  $("div#DataQueue00_start").click(function() {
+    send_to_server({msg: "COMMAND DataQueue00 start"});
+  });
+  $("div#DataQueue00_exit").click(function() {
+    send_to_server({msg: "COMMAND DataQueue00 exit"});
+  });
+</script>

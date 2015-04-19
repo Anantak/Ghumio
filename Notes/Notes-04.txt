@@ -1,0 +1,13 @@
+Feb 2 2015
+
+Building the batch mode using VIO. Here I focus on the maths. Later when in realtime mode focus
+will be to get it working in selective marginalization mode. That will have more software component
+than this one.
+
+Start with reading all data from saved files.
+Create states.
+Create error states.
+Build the problem with residuals and jacobians coded.
+Solve the problem to get correct error states.
+
+

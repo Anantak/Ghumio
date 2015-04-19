@@ -1,0 +1,29 @@
+<div class="ComponentPanel" id="Filter00">
+  <div class="MessagesContainer" id="Filter00_messages">
+    <div class="PanelHeader" id="Filter00_header">Filter00</div>
+    <div class="Message" id="Filter00_status">Unknown</div>
+    <div class="Time" id="Filter00_up_time">Unknown</div>
+    <div class="ProcessId" id="Filter00_process_id"></div>
+    <div class="StatusString" id="Filter00_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="Filter00_buttons">
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="Filter00_start">START</div>
+      <div class="ExitButton" id="Filter00_exit">EXIT</div>
+    </div>
+  </div>
+</div>
+<script>
+  function update_Filter00(data) {
+    $("div#Filter00_status").text(data.status);
+    $("div#Filter00_up_time").text(data.up_time);
+    $("div#Filter00_process_id").text(data.process_id);
+    $("div#Filter00_status_str").text(data.status_str);
+  }
+  $("div#Filter00_start").click(function() {
+    send_to_server({msg: "COMMAND Filter00 start"});
+  });
+  $("div#Filter00_exit").click(function() {
+    send_to_server({msg: "COMMAND Filter00 exit"});
+  });
+</script>

@@ -1,0 +1,45 @@
+package anantak;
+
+// Setup of all programs running on the machine. ProgramCommander is responsible for managing
+// these programs. 
+message ProgramsSetup {
+
+  required string name = 1;
+
+  message ProgramSettings {
+    // Name of the program. This is used to identify the program throughout the system.
+    required string name = 1;
+    // Command that runs the program in a terminal
+    optional string command_line = 2;
+    // Status type for this program
+    optional string status_type = 3;
+    // Program startup directions
+    optional string startup_direction = 4;
+    optional int32 startup_sequence = 5;
+    optional string config_file = 6;
+    
+    enum ConnectionType {
+      STATUS = 0;
+      COMMAND = 1;
+    }
+    
+    message ConnectionSettings {
+      // Name of the connection
+      required string name = 1;
+      // Endpoint for ZMQ
+      optional string endpoint = 2;
+      // Subject used for the communication
+      optional string subject = 3;
+      // Type of connection
+      optional ConnectionType type = 4;
+      // Type of messages communicated on the connection
+      optional string message_type = 5;
+    }
+    repeated ConnectionSettings subscription = 100;
+    repeated ConnectionSettings publication = 200;  
+
+  }
+  repeated ProgramSettings program_settings = 100;
+  
+}
+

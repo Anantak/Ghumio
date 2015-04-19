@@ -1,0 +1,43 @@
+<div class="ComponentPanel" id="DataPublisher">
+  <div class="MessagesContainer" id="DataPublisher_messages">
+    <div class="PanelHeader" id="DataPublisher_header">DataPublisher</div>
+    <div class="Message" id="DataPublisher_status">Unknown</div>
+    <div class="Time" id="DataPublisher_up_time">Unknown</div>
+    <div class="ProcessId" id="DataPublisher_process_id"></div>
+    <div class="StatusString" id="DataPublisher_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="DataPublisher_buttons">
+    <div class="ButtonsColumn">
+      <div class="Button Green" id="DataPublisher_play">PLAY</div>
+      <div class="Button Orange" id="DataPublisher_pause">PAUSE</div>      
+      <div class="Button Red" id="DataPublisher_stop">STOP</div>      
+    </div>
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="DataPublisher_start">START</div>
+      <div class="ExitButton" id="DataPublisher_exit">EXIT</div>      
+    </div>
+  </div>
+</div>
+<script>
+  function update_DataPublisher(data) {
+    $("div#DataPublisher_status").text(data.status);
+    $("div#DataPublisher_up_time").text(data.up_time);
+    $("div#DataPublisher_process_id").text(data.process_id);
+    $("div#DataPublisher_status_str").text(data.status_str);
+  }
+  $("div#DataPublisher_start").click(function() {
+    send_to_server({msg: "COMMAND DataPublisher start"});
+  });
+  $("div#DataPublisher_exit").click(function() {
+    send_to_server({msg: "COMMAND DataPublisher exit"});
+  });
+  $("div#DataPublisher_play").click(function() {
+    send_to_server({msg: "COMMAND DataPublisher play"});
+  });
+  $("div#DataPublisher_stop").click(function() {
+    send_to_server({msg: "COMMAND DataPublisher stop"});
+  });
+  $("div#DataPublisher_pause").click(function() {
+    send_to_server({msg: "COMMAND DataPublisher pause"});
+  });
+</script>

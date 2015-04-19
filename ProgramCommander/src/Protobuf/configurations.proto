@@ -1,0 +1,79 @@
+package anantak;
+
+// DataQueue configuration
+message DataQueueConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  message Sensor {
+    required string name = 1;
+    optional int32 queue_length = 2;
+    optional bool track = 3;
+    optional int32 track_length = 4;
+  }
+  message DataSubscriber {
+    required string name = 1;
+  }
+  repeated Sensor sensor = 30;                      // Sensors to get data from
+  repeated DataSubscriber data_subscriber = 40;     // DataSubscribers to send data to
+}
+
+// MessageFilesPublisher configuration
+message MessageFilesPublisherConfig {
+  optional string name = 1;               // Name of this configuration
+  optional float cycle_frequency = 2;     // Cycling frequency of the files publisher
+  optional int64 data_start_time = 3;     // Start time of the recorded data of all sensors
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  message Sensor {
+    required string name = 1;             // Name of sensor - should match name in ProgramsSetup
+    required string data_file = 2;        // File with the data to be loaded for this sensor
+  }
+  repeated Sensor sensor = 30;
+}
+
+/** Sliding Window Filter configuration
+ *    Max sliding window size, iteration interval and observation frequency are used to estimate
+ *    the memory size allocation kept. When sizes 
+ **/
+message FilterConfig {  
+  // Filter specs
+  optional string name = 1;
+  optional float cycle_frequency = 2;     // Cycling frequency of the files publisher
+  optional int64 max_sliding_window_interval = 3;   // Maximum sliding window interval musec
+  optional int64 max_iteration_interval = 4;        // Maximum iteration interval musec
+  optional float max_observation_frequency = 5;     // Maximum frequency of observations (Hz)
+  
+  // Component specs
+  optional string publisher_name = 10;    // name of the main publisher 
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  message DataQueue {                   // Sources of observations
+    required string name = 1;             // Name of the data queue - should match name in Settings
+  }
+  repeated DataQueue data_queue = 30;     // Filter can have multiple data queues
+  
+  message ObservationType {             // Observation types that the filter expects to see
+    required string name = 1;             // HeaderMsg.Type strings in sensor msgs
+    optional float max_frequency = 2;     // Maximum expected frequency of observations (Hz)
+    optional int32 max_msgs_per_iteration = 3; // = max_frequency * max_iteration_interval
+  }
+  repeated ObservationType observation_type = 40; // Filter acts on many types of observations
+  
+  message Model {                       // Models prepare states and constraints from observations
+    required string name = 1;
+    required string type = 2;
+    required string config_file = 3;
+    optional string results_subject = 10;  /** If given, this model's results message will be
+                                           *  transmitted on the subject. This usually is the name
+                                           *  of the component receiving the messages */
+  }
+  repeated Model model = 50;              // There are many models in a filter
+  
+}

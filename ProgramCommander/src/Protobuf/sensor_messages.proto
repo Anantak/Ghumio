@@ -1,0 +1,109 @@
+/**
+ * Sensor Message declaration
+ * Each sensor has at least a header message with tag = 1
+ */
+
+package anantak;
+
+/** Common component of each message */
+message HeaderMsg {
+  required int64 timestamp = 1;         // timestamp associated with the message
+  required string type = 2;             // type of the message. Could be a sensor name.
+  optional int64 recieve_timestamp = 3; // Time sensor got the message
+  optional int64 send_timestamp = 4;    // Time sensor sent the message
+}
+
+/** Sensor message */
+message SensorMsg {
+  // Header
+  required HeaderMsg header = 1;
+  // Payload
+  optional MachineInterfaceMsg mi_msg = 11;
+  optional ImuMsg imu_msg = 12;
+  optional AprilTagMessage april_msg = 13;
+  optional MonocularSparsePointsMsg mono_sparse_points_msg = 14;
+  optional MonocularPinholeCalibrationNoDistortionMsg mono_calib_no_distort_msg = 15;
+}
+
+/** Data request - reply is a composite message */
+message DataRequestMsg {
+  enum RequestType {
+    LATEST = 0;
+    INTERVAL = 1;
+  }
+  required RequestType type = 1;
+  optional int64 begin_timestamp = 10;
+  optional int64 end_timestamp = 11;
+}
+
+/** Composite message of multiple serialized messages */
+message CompositeMsg {
+  optional int64 timestamp = 1;        // not sure if this is even needed
+  // Repeated message string
+  repeated bytes message_data = 100;
+}
+
+/** Machine interface data */
+message MachineInterfaceMsg {
+  optional int64 out_time = 101;
+  optional int64 in_time = 102;
+  optional int32 left_motor = 103;
+  optional int32 right_motor = 104;
+  optional int32 left_servo = 105;
+  optional int32 right_servo = 106;
+  optional int32 in_counter = 107;
+  optional int32 out_counter = 108;
+  optional int32 rear_left_encoder = 109;
+  optional int32 rear_right_encoder = 110;
+  optional int32 front_left_encoder = 111;
+  optional int32 front_right_encoder = 112;
+  optional int32 delay = 113;
+  optional int32 rear_left_current = 114;
+  optional int32 rear_right_current = 115;
+  optional int32 front_left_current = 116;
+  optional int32 front_right_current = 117;
+  optional int32 temperature = 118;
+}
+
+/** Inertial Measurement Unit data */
+message ImuMsg {
+  optional int32 imu_num = 101;
+  repeated int32 quaternion = 102 [packed=true];
+  repeated int32 linear = 103 [packed=true];
+  repeated int32 angular = 104 [packed=true];
+}
+
+/** AprilTag Sensor data */
+message AprilTagMessage {
+  optional int32 camera_num = 101;
+  repeated string tag_id = 102;                       // Id of the tag
+  repeated float u_1 = 103 [packed=true];             // u coordinate of corner 1 - top left
+  repeated float v_1 = 104 [packed=true];             // v coordinate of corner 1 - top left
+  repeated float u_2 = 105 [packed=true];             // u coordinate of corner 2 - top right
+  repeated float v_2 = 106 [packed=true];             // v coordinate of corner 2 - top right
+  repeated float u_3 = 107 [packed=true];             // u coordinate of corner 3 - bottom right
+  repeated float v_3 = 108 [packed=true];             // v coordinate of corner 3 - bottom right
+  repeated float u_4 = 109 [packed=true];             // u coordinate of corner 4 - bottom left
+  repeated float v_4 = 110 [packed=true];             // v coordinate of corner 4 - bottom left
+}
+
+/** Monocular Sparse Points Matcher data */
+message MonocularSparsePointsMsg {
+  optional int32 camera_num = 101;
+  repeated float u_curr = 102 [packed=true];
+  repeated float v_curr = 103 [packed=true];
+  repeated int32 i_curr = 104 [packed=true];
+  repeated float u_prev = 105 [packed=true];
+  repeated float v_prev = 106 [packed=true];
+  repeated int32 i_prev = 107 [packed=true];
+}
+
+/** Monocular pinhole calibration - no distortion */
+message MonocularPinholeCalibrationNoDistortionMsg {
+  optional int32 camera_num = 101;
+  optional double focal_length = 102;
+  optional double cx = 103;
+  optional double cy = 104;
+}
+
+

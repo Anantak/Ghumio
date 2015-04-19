@@ -1,0 +1,222 @@
+Sun Dec 14 2014
+
+I am chasing the June-end deadline. I understand how to go about building the perception model.
+But I am still not sure on how to solve the control problem. By the time we come back to Austria
+during May 20th 2015, we have to have the perception and fusion done. Then in 5 weeks of May-end to
+June end, get the control problem solved and done well-enough for the demo. During July we should
+take the machine around to at least 4 places for demo. May be start with TUM, ETH.
+
+Historical data publisher
+
+One HistoricalData publisher should be able to simulate many sensors. Each sensor has a publisher
+that it uses to publish its messages. HistoricalData pub should be able to emulate all these
+sensors. So it is given a list of sensors it is emulating at the beginning. HistorialDataPublisher
+will read the sensor pub/sub configuration from the main setup file. It will then own a list of
+publishers from which it will publish sensor messages. At the beginning we will ask it to load a
+certain number of messages in memory. When the messages get depleted, next set of messages will be
+loaded. We will keep track of time it takes to load the messages from disk.
+
+Each sensor is associated with the type of message. So the config file of the HistoricalDataPub has
+the following information:
+
+  repeated string sensor_name         // this is a number of sensors that this will represent
+  repeated string sensor_config_file  // this is the sensor config file that contains info about
+                                      // the type of messages the sensor publishes
+  
+
+HistoricalDataPublisher will publish the 'current' messages in a loop. Say the starting historical
+timestamp was h_ts. Say the publishing of messages started at c_ts. Then a message with timestamp
+_ts will become current when (_ts - h_ts + c_ts) < current_time. In a loop, whenever this happens,
+the messages will be published.
+
+HistoricalDataPublisher will have two threads: DataLoader and DataPublisher. DataLoader will load
+the data regularly from the disk using the knowledge of end-time-of-last-load, loading-time, and
+saving-to-message-queue time. It will attempt to load data such that message-queue is always full
+of data to be transmitted. DataPublisher thread will receive the data from DataLoader on an inproc
+socket and save data when it comes. It will continuously run in a loop checking for messages that
+appear in a time window of last loop to now. All those messages will be collected from each message
+queue and will be transmitted over the publisher.
+
+HistoricalDataPublisher is doing the following things:
+
+  Starts with a config file specifying sensors to be emulated and data files with historical data
+    Reads the ProgramsSetup file to load the sensors configuration
+    Reads the historical timestamp from which to start publishing
+  Creates a command subscriber and publisher that replies to status queries from ProgramCommander
+  Owns a DataLoader
+  DataLoader:
+    At startup goes through each file of data and collects statistics such as num-of-messages, rate
+    Creates a schedule of data-loading based on input parameters, e.g. staggered 5 sec per sensor
+    Creates a context for inproc data supply to the DataPublisher
+    Keeps statistics for each sensor: time-to-load-data, time-to-supply-data-to-publisher
+    Keeps file handles open for each sensor data file
+    Starts a loop that
+      Checks if it is time to load data for a sensor
+      If it is time, load the data and send to the DataPublisher
+    When done reading files, closes all file handles, update status to say 'Done'
+  Starts one thread: DataPublisher
+  DataPublisher:
+    Gets the setupfiles for each sensor to be emulated, plus its internal loop frequency
+    Owns a set of publishers that emulate each sensor
+    Owns a set of MessageQueues one for each sensor
+    Starts its loop
+      Recieves command to start publishing along with the historical timestamp used as current-time
+      Recieves data from DataLoader and directs it to the correct MessageQueue
+      Asks each DataQueue for 'current' messages between last iteration and current iteration
+      Publishes current messages on the corresponding publishers
+
+
+DataQueue
+
+DataQueue is closely related to data publisher. It owns a number of MessageQueues each connected to
+getting data from a single sensor. The DataQueue will own the logic to load the configuration of a
+target sensor from which it will recieve the data. It will instantiate a MessageQueue for each
+sensor. DataQueue will own a subscriber each for each sensor and route the messages recieved from
+the subscriber to the MessageQueue. When a data-request is received, DataQueue will ask each
+MessageQueue for data and publish the data addressed to the caller. So DataQueue owns the following
+activities:
+  Owns a set of subscribers
+    for getting data from each sensor 
+    for getting data fetch requests
+    for status reporting and commands
+  Owns a publisher for publishing data
+  Owns a MessageQueue for each sensor subscribed
+  Routes the messages to MessageQueues as messages arrive
+  Recieves commands on its set subscribers for data fetch requests
+    Collects data from each MessageQueue and sends to the asking publisher
+  Keeps its state that includes a bunch of performance measures to be tracked
+  Replies to StatusQueries by supplying a number of state-explaining variables
+
+DataQueue config needs the following things:
+
+  repeated string sensor_name;  // these are the names of sensors
+  repeated string data_subscriber_name;   // these are names of data subscribers
+
+  All sensor data is sent to corresponding MessageQueues
+  All data requests have begin-end-timestamps. Each message queue is accessed. Data is published.
+
+MessageQueue
+
+Message queue holds a single message-type in a circular queue. Circular queue is implemented simply
+as a vector as it allows access to any element easily. Its size can be modified easily. Following
+operations are performed by a MessageQueue:
+
+  Owns a vector of unique_ptrs to the type of message to be held in the message queue
+  Allows modifying the length of the queue kept
+    On length modification new objects are added or current ones are deleted as needed
+    All pointers to objects are reassigned
+  New messages come and simply overwrite the old ones in the circular queue
+  Messages are kept in their serialized form, deserialization is needed only to extract the msg-ts
+  Knows what the timestamp of each message is - also knows the delay between msg-ts and recieved-ts
+  
+
+Utilities
+
+  ConfigurationFactory
+  We will define a number of configuration files for different programs. A ConfigFactory will be
+  needed to supply instances of config objects
+  
+  MessageFactory
+  As the number and type of messages proliferate, it will become crucial get a single factory to
+  create different type of messages. Our typical use case will be always to keep a message object
+  allocated, and 'fill' it up with new message data as it arrives. We will not try to allocate-and-
+  reallocate the data again and again.
+  
+Fri Dec 19 2014
+
+First version of MessageQueue is ready. DataQueue is in progress, it needs DataPublisher to
+continue. I now need to publish the data from the DataPublisher. For that first I need to convert
+the data from older text messages to protobuf format, store them and design a way to retrieve them
+via a DataLoader.
+
+Building the DataLoader: first load the older data, sort it by timestamp. Create a Protobuf message
+from this data and serialize it out to a file. Then make a data reader from the file, that gets the
+header of the message out. Call this MessageFileWriter and MessageFileReader.
+Second arrange the MessageFileReader/Writers into a DataLoader. Load multiple files as indicated by
+the config file, make sure they can be read and extract the timestamps characteristics from them.
+Create a schedule to read each file - keep the schedule staggerred in time.
+Third write the DataPublisher that publishes the data from its MessageQueues. Then connect it with
+the DataLoader as a thread communicating with an inproc socket. At this point we can start listening
+at the DataQueue. Along with this, we work on StatusKeepers to convey the state of the component.
+
+DataLoader has a subscription loop with following subscribers:
+  Command subscriber - processes commands
+  Status subscriber - processes status queries
+  Inproc reply subscriber - This gets replies from the data inserts into the publisher queue. Reply
+    has a timestamp of the time the request was made. This is used to calculate the round trip
+    delay. Everytime such a reply comes, the schedule will be updated for the subscriber. Only
+    change the timestamp if change makes it not go into the past.
+  File reader loop - In each iteration, check the schedule if a reading timestamp lies in this
+    interval. If so, read the file for the number of messages in the schedule, send it over to the
+    DataPublisher via the inproc socket. 
+
+Message File Writer
+
+Gets a filename at construction. It will attempt to open the file in write mode at the outset.
+There may be another empty constructor. But then you have to give it a filename next via mutator.
+Then you keep calling WriteMessage(Message*) with link to a message that will be written to file.
+In the end close the file.
+Destructor cold check if the file is still open, if so it can close it.
+A bool flag file_is_open will be kept through out the lifecycle of the file.
+
+Message File Reader
+
+File reader gets a file to be read at construction.
+Empty constructor is also there, but then you call the set_filename before we can read a file.
+bool file_is_open flag will be kept to track if the file is open.
+Init will try to open the file in read mode.
+ReadNextMessage() will read next message and pass its ownership to calling function.
+GetHeaderMeassage() will be a common_functions.h function that extracts the header from a message.
+Close() will close the file.
+Destructor will close the file too if it is open.
+
+Get Message File Statistics
+
+This will use the MessageFileReader to open and read the file, extract header from each message.
+Create a vector of headers and calculate some statistics:
+  Number of messages, Frequency, [0,25,50,75,100%iles] of: time gaps between messages, delays
+  between creation and arrival of messages, delay between arrival and sending of messages, size of
+  messages.
+
+Message Data Loader
+
+This will get a config file, create a number of Message File Readers and Extract Stats to create a
+loading schedule. Then it will start a loop in while it will check commands and follow the schedule.
+Every time a load is made, it will do something with the data - for example send it all to Data
+Publisher.
+
+Create File Reading Schedule
+
+Input is an amount of time per read. While reading the first time, time-taken per message read can
+be calculated and kept. The reading time for a block of messages will be
+  reading time = block's first time stamp - n_msgs*(message_read_time + message_send_time + margin)
+  margin: a safety margin
+The reading schedule is a vector of the following information:
+  first time stamp of the message in the block,
+  number of messages in the block
+Following time intervals are maintained per message data file:
+  message read time from the file on disk
+  message round trip send time to data publisher
+So the schedule creation is simply reading all messages and counting how many messages lie in each
+time interval of reading_block_interval.
+
+Data Publisher
+
+Keeps a map of DataQueues for each sensor. Creates a publisher for each sensor. Runs a loop where in
+each iteration it:
+  Collects messages to be published from every queue. Publishes them from the publisher that
+    corresponds to the message queue.
+  Checks for messages on inproc. When a composite message comes, its messages are to inserted.
+    Each message's header is extracted. The transmission timestamp and type of message is
+    extracted. Based on the type of message, it is inserted into the correct message queue.
+    Once the data is inserted, a reply is sent back to the DataLoader thread with the current
+    timstamp and the timestamp of the recieved message. Data Loader uses this to update the time
+    buffer it uses to read the file from the disk.
+    
+Dec 31 2014
+
+Got all components for realtime data feeding built - Component Commander, Historical Data Publisher,
+Data Queue, Web Commander and the shell of the Filter. Now comes the time to dive into building
+the Models and Filter.
+
+
