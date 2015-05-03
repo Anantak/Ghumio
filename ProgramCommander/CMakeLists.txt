@@ -11,9 +11,9 @@ find_package(Protobuf REQUIRED)
 find_package(ZMQ REQUIRED)
 find_package(Ctemplate REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(OpenCV REQUIRED)
-find_package(Ceres REQUIRED)
-find_package(Boost 1.55 REQUIRED)
+#find_package(OpenCV)
+#find_package(Ceres)
+#find_package(Boost 1.55)
 
 # use sse3 instruction set
 #SET(CMAKE_CXX_FLAGS "-march=native -msse3 -O3")
@@ -79,7 +79,7 @@ FILE(GLOB LIBVISO2_SRC_FILES "${PROJECT_SOURCE_DIR}/src/Thirdparty/libviso2/*.cp
 
 add_executable(test_component_commander src/test/test_component_commander.cc ${SOURCE_FILES})
 target_link_libraries(test_component_commander ${GLOG_LIBRARIES})
-target_link_libraries(test_component_commander ${GFLAGS_LIBRARIES})
+target_link_libraries(test_component_commander gflags)
 target_link_libraries(test_component_commander ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_component_commander ${ZMQ_LIBRARIES})
 target_link_libraries(test_component_commander ${CTEMPLATE_LIBRARIES})
