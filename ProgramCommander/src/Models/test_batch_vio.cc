@@ -3188,9 +3188,11 @@ namespace anantak {
       Eigen::Quaterniond WqI1  = state1_->Quaternion().conjugate();
       Eigen::Matrix3d WrI1_ = WqI1_.toRotationMatrix();
       Eigen::Quaterniond I1_qI1 = WqI1_.conjugate() * WqI1;
-      Eigen::AngleAxisd I1_aI1(I1_qI1);
+      /*Eigen::AngleAxisd I1_aI1(I1_qI1);
       double aa_angle = I1_aI1.angle();
       Eigen::Vector3d aa_axis = I1_aI1.axis();
+      if (aa_angle <= -anantak::Pi_2) aa_angle += anantak::Pi_2;
+      if (aa_angle >=  anantak::Pi_2) aa_angle -= anantak::Pi_2;
       if (aa_angle > anantak::Pi_half && aa_angle < anantak::Pi) {
         aa_angle = anantak::Pi - aa_angle;
         aa_axis *= -1.;
@@ -3202,7 +3204,8 @@ namespace anantak {
             << aa_angle << " " << aa_axis.transpose();
         return false;
       }
-      Eigen::Vector3d I1_avI1 =  aa_angle * aa_axis;
+      Eigen::Vector3d I1_avI1 =  aa_angle * aa_axis;*/
+      Eigen::Vector3d I1_avI1 = 2.*I1_qI1.vec();    // approximation assuming small angle
       R_.block<3,1>(rotn_idx,0) = WrI1_ * I1_avI1;
       R_.block<3,1>(posn_idx,0) = integral_.p1 - state1_->GpI_;
       R_.block<3,1>(velo_idx,0) = integral_.v1 - state1_->GvI_;
@@ -3416,6 +3419,160 @@ namespace anantak {
     
   }; // ImuResidualFunction
   
+  /* Vector3d Prior
+   * Setup a prior on a 3d vector */
+  class Vector3dPrior : public ceres::SizedCostFunction<3, 3> {
+   public:
+    // Type declarations
+    typedef Eigen::Map<Eigen::Matrix<double,3,1>> MapVector3dType;
+    typedef Eigen::Map<const Eigen::Matrix<double,3,1>> MapConstVector3dType;
+    typedef Eigen::Matrix<double,3,3,Eigen::RowMajor> Matrix3x3RowType;
+    typedef Eigen::Map<Eigen::Matrix<double,3,3,Eigen::RowMajor>> MapMatrix3x3RowType;
+    
+    struct Options {
+      double sigma_position;
+      Options() {
+        sigma_position = 0.010;               // in whatever units
+      }
+    };
+    
+    // Options
+    Vector3dPrior::Options options_;
+    
+    // Data holders
+    Eigen::Vector3d expected_position_;       /**< WpI value of position */
+    anantak::Vector3dState *measurement_;       /**< One measurement of the pose */
+    
+    // Starting residual
+    Eigen::Vector3d residual_;      /**< Starting residual */
+    
+    // Jacobian matrices
+    Matrix3x3RowType dresidual_dmeasurement_;
+    
+    // Default constructor
+    Vector3dPrior():
+      options_(),
+      expected_position_(Eigen::Vector3d::Zero()),
+      measurement_(NULL) {
+      residual_.setZero();
+      dresidual_dmeasurement_.setZero();
+    }
+    
+    // Default copy constructor
+    Vector3dPrior(const Vector3dPrior& r) {
+      options_=r.options_;
+      expected_position_=r.expected_position_;
+      measurement_=r.measurement_;
+      residual_=r.residual_;
+      dresidual_dmeasurement_=r.dresidual_dmeasurement_;
+    }
+    
+    // Destructor
+    virtual ~Vector3dPrior() {}
+    
+    // Reset residual
+    bool Reset() {
+      expected_position_ = Eigen::Vector3d::Zero();
+      measurement_=NULL;
+      residual_.setZero();
+      dresidual_dmeasurement_.setZero();
+      return true;
+    }
+    
+    // Create the prior using a given quaternion (IqW) and position (WqI)
+    bool Create(const Eigen::Vector3d *posn, anantak::Vector3dState *measured_pose,
+        Vector3dPrior::Options *options) {
+      // Any checks?
+      
+      // Reset the residual
+      Reset();
+      
+      // Assign new values
+      expected_position_ = *posn;   // copy
+      measurement_ = measured_pose; 
+      options_ = *options;
+      if (!CalculateStartingResidualandJacobians()) {
+        LOG(ERROR) << "Could not calculate Jacobians. Exit.";
+        return false;
+      }
+      return true;
+    }
+    
+    // Create prior - only needs the expected value and a variance
+    bool Create(const anantak::Vector3dState *expected_pose, anantak::Vector3dState *measured_pose, 
+        Vector3dPrior::Options *options) {
+      Eigen::Vector3d posn(expected_pose->Position());
+      return Create(&posn, measured_pose, options);
+    }
+    
+    // Calculate Jacobians
+    bool CalculateStartingResidualandJacobians() {
+      
+      Eigen::Vector3d WpI = measurement_->Position();
+      Eigen::Vector3d WpI_ = expected_position_;
+      Eigen::Vector3d WdpI = WpI - WpI_;
+      
+      residual_ =  WdpI;
+      
+      dresidual_dmeasurement_ = -Eigen::Matrix3d::Identity();
+      
+      // Address noises
+      double inv_sqrt_var_position = 1./options_.sigma_position;
+      Eigen::Vector3d inv_sqrt_var_mat_diag;
+      inv_sqrt_var_mat_diag << inv_sqrt_var_position, inv_sqrt_var_position, inv_sqrt_var_position;
+      
+      // Scale residual and jacobians for noise sqrt variance
+      residual_ = inv_sqrt_var_mat_diag.asDiagonal() * residual_;
+      dresidual_dmeasurement_ = inv_sqrt_var_mat_diag.asDiagonal() * dresidual_dmeasurement_;
+      
+      return true;
+    }
+    
+    bool Check() {
+      return true;
+    }
+    
+    // Get ready for optimization
+    bool GetReadyToOptimize() {
+      if (!Check()) {
+        LOG(ERROR) << "Check failed. Can not continue.";
+        return false;
+      }
+      // Set the errors to zero
+      measurement_->SetErrorZero();
+      
+      return true;
+    }
+    
+    // Evaluate function for ceres solver
+    virtual bool Evaluate(
+        double const* const* parameters,
+        double* residuals,
+        double** jacobians) const {
+      
+      // Assuming Check() has been performed before
+      
+      // Mapping residuals and parameters to matrices
+      MapConstVector3dType   dmeasurement(parameters[0]);
+      MapVector3dType        residual(residuals);
+      
+      /* Calculate residual from the error states. Linear model of the residual wrt error states
+       * is used to recalculate the residual. */
+      residual = residual_ + dresidual_dmeasurement_*dmeasurement;
+      
+      /* Jacobians are not recalculated with changing states. We use first estimates Jacobians
+       * as this shown to keep the estimator consistent. */
+      if (jacobians != NULL) {
+        if (jacobians[0] != NULL) {
+          MapMatrix3x3RowType jac(jacobians[0]);
+          jac = dresidual_dmeasurement_;
+        }
+      }
+      
+      return true;
+    }
+    
+  };  // Vector3dPrior 
   
   /* NoisyPosePrior
    * Setup a prior on a noisy pose */
@@ -4234,6 +4391,267 @@ namespace anantak {
     
   };  // ImuToCameraPoseResidual
   
+  
+  /* Rigid Pose With IMU constraint
+   * Applies a constraint that a sensor pose is rigidly related to the imu */
+  class RigidPoseWithImuResidual : public ceres::SizedCostFunction<6, 15,6,6,6> {
+   public:
+    // Type declarations
+    typedef Eigen::Map<Eigen::Matrix<double,6,1>> MapVector6dType;
+    typedef Eigen::Map<const Eigen::Matrix<double,6,1>> MapConstVector6dType;
+    typedef Eigen::Map<const Eigen::Matrix<double,15,1>> MapConstVector15dType;
+    typedef Eigen::Matrix<double,6,6,Eigen::RowMajor> Matrix6x6RowType;
+    typedef Eigen::Matrix<double,6,15,Eigen::RowMajor> Matrix6x15RowType;
+    typedef Eigen::Map<Eigen::Matrix<double,6,6,Eigen::RowMajor>> MapMatrix6x6RowType;
+    typedef Eigen::Map<Eigen::Matrix<double,6,15,Eigen::RowMajor>> MapMatrix6x15RowType;
+    
+    struct Options {
+      double sigma_theta;
+      double sigma_position;
+      bool rate_of_change;    /**< True if this is a rate of change of pose residual */
+      Options() {
+        sigma_theta = 2.*RadiansPerDegree;   // in Radians
+        sigma_position = 0.005;              // in meters
+        rate_of_change = false;              // By default not a rate of change
+      }
+    };
+    
+    // Options
+    RigidPoseWithImuResidual::Options options_;
+    
+    // Data holders
+    anantak::ImuState *poseI_;          /**< Pose of Imu sensor in W frame */
+    anantak::Pose3dState *poseC_;       /**< Pose of second sensor in T0 frame */
+    anantak::Pose3dState *poseItoC_;    /**< Relative pose between sensors */
+    anantak::Pose3dState *poseT0toW_;   /**< Relative pose between sensors' reference frames */
+    
+    // Starting Residuals
+    Eigen::Matrix<double,6,1> CidposeC_;   /**< Starting residual */
+    
+    // Jacobian matrices
+    Matrix6x15RowType dCidposeC_dposeI_;
+    Matrix6x6RowType  dCidposeC_dposeC_;
+    Matrix6x6RowType  dCidposeC_dposeItoC_;
+    Matrix6x6RowType  dCidposeC_dposeT0toW_;
+    
+    // Default constructor
+    RigidPoseWithImuResidual():
+      options_(),
+      poseI_(NULL), poseC_(NULL), poseItoC_(NULL), poseT0toW_(NULL) {
+      CidposeC_.setZero();
+      dCidposeC_dposeI_.setZero(); dCidposeC_dposeC_.setZero(); dCidposeC_dposeItoC_.setZero();
+      dCidposeC_dposeT0toW_.setZero();
+    }
+    
+    // Default copy constructor
+    RigidPoseWithImuResidual(const RigidPoseWithImuResidual& r) {
+      options_=r.options_;
+      poseI_=r.poseI_; poseC_=r.poseC_; poseItoC_=r.poseItoC_; poseT0toW_=r.poseT0toW_;
+      CidposeC_=r.CidposeC_; 
+      dCidposeC_dposeI_=r.dCidposeC_dposeI_;
+      dCidposeC_dposeC_=r.dCidposeC_dposeC_;
+      dCidposeC_dposeItoC_=r.dCidposeC_dposeItoC_;
+      dCidposeC_dposeT0toW_=r.dCidposeC_dposeT0toW_;
+    }
+    
+    // Destructor
+    virtual ~RigidPoseWithImuResidual() {}
+    
+    // Reset residual
+    bool Reset() {
+      poseI_=NULL; poseC_=NULL; poseItoC_=NULL; poseT0toW_=NULL;
+      CidposeC_.setZero();
+      dCidposeC_dposeI_.setZero(); dCidposeC_dposeC_.setZero(); dCidposeC_dposeItoC_.setZero();
+      dCidposeC_dposeT0toW_.setZero();
+      return true;
+    }
+    
+    // Create residual
+    bool Create(anantak::ImuState *poseI, anantak::Pose3dState *poseC,
+        anantak::Pose3dState *poseItoC, anantak::Pose3dState *poseT0toW,
+        RigidPoseWithImuResidual::Options *options) {
+      if (poseI->IsZero()) {
+        LOG(WARNING) << "Provided imu pose is zero";
+      }
+      if (poseC->IsZero()) {
+        LOG(WARNING) << "Provided sensor pose is zero";
+      }
+      // Should we check if any of the other poses are zero too?
+      // Should we return false if so?
+      
+      // Reset the residual
+      Reset();
+      
+      // Assign new values
+      poseI_ = poseI;
+      poseC_ = poseC;
+      poseItoC_ = poseItoC;
+      poseT0toW_ = poseT0toW;
+      options_ = *options;  // copy options
+      if (!CalculateStartingResidualandJacobians()) {
+        LOG(ERROR) << "Could not calculate Jacobians. Exit.";
+        return false;
+      }
+      return true;
+    }
+    
+    // Calculate Jacobians
+    bool CalculateStartingResidualandJacobians() {
+      
+      /* All maths here is written in robotics notebook#4, ppg 85-86 */
+      
+      // Collect the available estimates
+      Eigen::Quaterniond IiqW(poseI_->Quaternion());      // State has IiqW
+      Eigen::Quaterniond CqI(poseItoC_->Quaternion());    // Stored CqI
+      Eigen::Quaterniond CiqT0(poseC_->Quaternion());     // Stored is CiqT0
+      Eigen::Quaterniond WqT0(poseT0toW_->Quaternion());  // Stored is WqT0
+      
+      Eigen::Vector3d WpIi(poseI_->GpI_);
+      Eigen::Vector3d IpC(poseItoC_->GpL_);
+      Eigen::Vector3d T0pCi(poseC_->GpL_);
+      Eigen::Vector3d T0pW(poseT0toW_->GpL_);
+      
+      Eigen::Matrix3d IirW(IiqW);
+      Eigen::Matrix3d CrI(CqI);
+      Eigen::Matrix3d CirT0(CiqT0);
+      Eigen::Matrix3d WrT0(WqT0);
+      
+      // Calculate starting residuals
+      Eigen::Matrix3d I3(Eigen::Matrix3d::Identity());
+      Eigen::Quaterniond CiqW = CiqT0 * WqT0.conjugate();
+      Eigen::Vector3d T0WpCi_est = T0pCi - T0pW;
+      Eigen::Vector3d WpCi_est = WrT0*T0WpCi_est;
+      Eigen::Quaterniond CidqC_est = CiqW * IiqW.conjugate() * CqI.conjugate();
+      Eigen::Matrix3d CidrC_est(CidqC_est);
+      Eigen::Vector3d WIipCi_est = WpCi_est - WpIi;
+      Eigen::Vector3d IipCi_est = IirW*WIipCi_est;
+      Eigen::Vector3d CdpCi_est = CrI*(IipCi_est - IpC);
+      
+      CidposeC_.block<3,1>(0,0) = 2.*CidqC_est.vec();    // Approximation in conversion to angleaxis
+      CidposeC_.block<3,1>(3,0) = CdpCi_est;
+      
+      // Calculate Jacobians
+      Matrix6x6RowType CrICrI;
+      CrICrI.setZero();
+      CrICrI.block<3,3>(0,0) = CrI;
+      CrICrI.block<3,3>(3,3) = CrI;
+      
+      Matrix6x6RowType WrT0WrT0;
+      WrT0WrT0.setZero();
+      WrT0WrT0.block<3,3>(0,0) = WrT0;
+      WrT0WrT0.block<3,3>(3,3) = WrT0;
+      
+      dCidposeC_dposeI_.setZero();
+      dCidposeC_dposeI_.block<3,3>(0,0) = -IirW;
+      dCidposeC_dposeI_.block<3,3>(3,0) =  IirW * anantak::SkewSymmetricMatrix(WIipCi_est);
+      dCidposeC_dposeI_.block<3,3>(3,3) = -IirW;
+      dCidposeC_dposeI_ = CrICrI*dCidposeC_dposeI_;
+      
+      dCidposeC_dposeC_.setZero();
+      dCidposeC_dposeC_.block<3,3>(0,0) = IirW;
+      dCidposeC_dposeC_.block<3,3>(3,3) = IirW;
+      dCidposeC_dposeC_ = CrICrI*dCidposeC_dposeC_*WrT0WrT0;
+      
+      dCidposeC_dposeItoC_.setZero();
+      dCidposeC_dposeItoC_.block<3,3>(0,0) = -I3;
+      dCidposeC_dposeItoC_.block<3,3>(3,0) =  anantak::SkewSymmetricMatrix(CdpCi_est);
+      dCidposeC_dposeItoC_.block<3,3>(3,3) = -I3;
+      dCidposeC_dposeItoC_ = CrICrI*dCidposeC_dposeItoC_;
+      
+      dCidposeC_dposeT0toW_.setZero();
+      dCidposeC_dposeT0toW_.block<3,3>(0,0) = -I3;
+      dCidposeC_dposeT0toW_.block<3,3>(3,0) =  anantak::SkewSymmetricMatrix(T0WpCi_est);
+      dCidposeC_dposeT0toW_.block<3,3>(3,3) = -I3;
+      dCidposeC_dposeT0toW_ = dCidposeC_dposeC_*dCidposeC_dposeT0toW_;
+      
+      // Scale residual and Jacobians by 1./sqrt(variances)
+      double inv_sqrt_var_theta = 1./options_.sigma_theta;
+      double inv_sqrt_var_posn  = 1./options_.sigma_position;
+      Eigen::Matrix<double,6,1> inv_sqrt_var_vec;
+      inv_sqrt_var_vec << inv_sqrt_var_theta, inv_sqrt_var_theta, inv_sqrt_var_theta,
+                          inv_sqrt_var_posn, inv_sqrt_var_posn, inv_sqrt_var_posn;
+      CidposeC_ = inv_sqrt_var_vec.asDiagonal() * CidposeC_;
+      dCidposeC_dposeI_     = inv_sqrt_var_vec.asDiagonal() * dCidposeC_dposeI_;
+      dCidposeC_dposeC_     = inv_sqrt_var_vec.asDiagonal() * dCidposeC_dposeC_;
+      dCidposeC_dposeItoC_  = inv_sqrt_var_vec.asDiagonal() * dCidposeC_dposeItoC_;
+      dCidposeC_dposeT0toW_ = inv_sqrt_var_vec.asDiagonal() * dCidposeC_dposeT0toW_;
+      
+      //VLOG(1) << "  dCidposeC_dposeI_= \n" << dCidposeC_dposeI_;
+      //VLOG(1) << "  dCidposeC_dposeC_= \n" << dCidposeC_dposeC_;
+      //VLOG(1) << "  dCidposeC_dposeItoC_= \n" << dCidposeC_dposeItoC_;
+      
+      return true;
+    }
+    
+    // Check if the residual is ready for optimization
+    bool Check() {
+      return true;
+    }
+    
+    // Get ready for Optimization
+    bool GetReadyToOptimize() {
+      if (!Check()) {
+        LOG(ERROR) << "Check failed. Can not continue.";
+        return false;
+      }
+      // Set the errors to zero
+      // Imu error state is set to zero elsewhere
+      poseC_->SetErrorZero();     // But we are not going to calculate this. 
+      poseItoC_->SetErrorZero();  // This is the main quantity we want to estimate.
+      poseT0toW_->SetErrorZero();
+      return true;
+    }
+    
+    // Evaluate function for ceres solver
+    virtual bool Evaluate(
+        double const* const* parameters,
+        double* residuals,
+        double** jacobians) const {
+      
+      // Assuming Check() has been performed before
+      
+      // Mapping residuals and parameters to matrices
+      MapConstVector15dType  dposeI(parameters[0]);
+      MapConstVector6dType   dposeC(parameters[1]);
+      MapConstVector6dType   dposeItoC(parameters[2]);
+      MapConstVector6dType   dposeT0toW(parameters[3]);
+      MapVector6dType        dCidposeC(residuals);
+      
+      /* Calculate residual from the error states. Linear model of the residual wrt error states
+       * is used to recalculate the residual. */
+      dCidposeC = CidposeC_
+                  + dCidposeC_dposeI_*dposeI
+                  + dCidposeC_dposeC_*dposeC
+                  + dCidposeC_dposeItoC_*dposeItoC
+                  + dCidposeC_dposeT0toW_*dposeT0toW;
+      
+      /* Jacobians are not recalculated with changing states. We use first estimates Jacobians
+       * as this shown to keep the estimator consistent. Also make calculations fast.*/
+      if (jacobians != NULL) {
+        if (jacobians[0] != NULL) {
+          MapMatrix6x15RowType jac(jacobians[0]);
+          jac = dCidposeC_dposeI_;
+        }
+        if (jacobians[1] != NULL) {
+          MapMatrix6x6RowType jac(jacobians[1]);
+          jac = dCidposeC_dposeC_;
+        }
+        if (jacobians[2] != NULL) {
+          MapMatrix6x6RowType jac(jacobians[2]);
+          jac = dCidposeC_dposeItoC_;
+        }
+        if (jacobians[3] != NULL) {
+          MapMatrix6x6RowType jac(jacobians[3]);
+          jac = dCidposeC_dposeT0toW_;
+        }
+      }
+      
+      return true;
+    }
+  }; // RigidPoseWithImuResidual
+  
+  
+  
   /* AprilTag VIO Residual - for static tags only
    * April tag view is 4 corners in an image. So residuals are:
    *  Four corner image coordinates, 8x1 residual
@@ -4835,6 +5253,326 @@ namespace anantak {
     }
     
   }; // AprilTagVioResidual
+  
+  
+  /* April Tag View residual
+   * This constrains Camera pose, tag pose and camera matrix given a tag view */
+  class AprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
+   public:
+    // Type declarations
+    typedef Eigen::Map<Eigen::Matrix<double,8,1>> MapVector8dType;
+    typedef Eigen::Map<const Eigen::Matrix<double,6,1>> MapConstVector6dType;
+    typedef Eigen::Map<const Eigen::Matrix<double,1,1>> MapConstVector1dType;
+    typedef Eigen::Map<const Eigen::Matrix<double,4,1>> MapConstVector4dType;
+    typedef Eigen::Map<Eigen::Matrix<double,8,6,Eigen::RowMajor>> MapMatrix8x6RowType;
+    typedef Eigen::Map<Eigen::Matrix<double,8,4,Eigen::RowMajor>> MapMatrix8x4RowType;
+    typedef Eigen::Map<Eigen::Matrix<double,8,1>> MapMatrix8x1RowType;
+    typedef Eigen::Matrix<double,8,6,Eigen::RowMajor> Matrix8x6RowType;
+    typedef Eigen::Matrix<double,8,1> Matrix8x1RowType;
+    typedef Eigen::Matrix<double,8,4,Eigen::RowMajor> Matrix8x4RowType;
+    typedef Eigen::Matrix<double,6,6,Eigen::RowMajor> Matrix6x6RowType;
+    typedef Eigen::Matrix<double,8,8,Eigen::RowMajor> Matrix8x8RowType;
+    typedef Eigen::Matrix<double,3,4> Matrix3x4Type;
+    typedef Eigen::Matrix<double,2,4,Eigen::RowMajor> Matrix2x4RowType;
+    typedef Eigen::Matrix<double,2,2,Eigen::RowMajor> Matrix2x2RowType;
+    typedef Eigen::Matrix<double,2,3,Eigen::RowMajor> Matrix2x3RowType;
+    typedef Eigen::Matrix<double,3,6,Eigen::RowMajor> Matrix3x6RowType;
+
+    
+    // Options object used by this residual
+    struct Options {
+      bool use_first_estimates;   /**< Should we re-evaluate Jacobians at every estimate? */
+      // Noise parameters
+      double sigma_image;             /**< Stdev of u,v location of corner in the image */
+      Options() {
+        use_first_estimates = true;       /**< Generally we use first estimate jacobians */
+        sigma_image = 1.0;                /**< 1-sigma corner location in pixels */
+      }
+    };
+    
+    // Data members
+    AprilTagViewResidual::Options options_;
+    
+    // Observation
+    const anantak::AprilTagReadingType *tag_view_;
+    
+    // States that this residual constrains
+    anantak::Pose3dState *poseC_;             /**< Camera pose tag map frame */
+    anantak::StaticAprilTagState *tagTj_;     /**< Tj tag pose in tag map frame and size of tag */
+    anantak::CameraIntrinsicsState *camera_;  /**< Camera intrinsics state */
+    
+    // Starting residual
+    Eigen::Matrix<double,8,1> tagview_residual_;   /**< Starting residual */
+    
+    // Jacobian matrices
+    Matrix8x6RowType    dtagview_dposeC_;
+    Matrix8x6RowType    dtagview_dposeT0toTj_;
+    Matrix8x1RowType    dtagview_dTj_size_;
+    Matrix8x4RowType    dtagview_dK_;             // K is the camera matrix
+    
+    // Default constructor
+    AprilTagViewResidual() :
+      options_(),
+      tag_view_(NULL),
+      poseC_(NULL), tagTj_(NULL), camera_(NULL) {
+      tagview_residual_.setZero();
+      dtagview_dposeC_.setZero();
+      dtagview_dposeT0toTj_.setZero();
+      dtagview_dTj_size_.setZero();
+      dtagview_dK_.setZero();
+    }
+    
+    // Default copy constructor
+    AprilTagViewResidual(const AprilTagViewResidual& r) {
+      options_=r.options_;
+      tag_view_ = r.tag_view_;
+      poseC_=r.poseC_; tagTj_=r.tagTj_; camera_ = r.camera_; 
+      tagview_residual_ = r.tagview_residual_;
+      dtagview_dposeC_ = r.dtagview_dposeC_;
+      dtagview_dposeT0toTj_ = r.dtagview_dposeT0toTj_;
+      dtagview_dTj_size_ = r.dtagview_dTj_size_;
+      dtagview_dK_ = r.dtagview_dK_;
+    }
+    
+    // Destructor
+    virtual ~AprilTagViewResidual() {}
+    
+    // Reset residual
+    bool Reset() {
+      // options_ are not reset
+      tag_view_ = NULL;
+      poseC_ = NULL; tagTj_ = NULL; camera_ = NULL;
+      tagview_residual_.setZero();
+      dtagview_dposeC_.setZero();
+      dtagview_dposeT0toTj_.setZero();
+      dtagview_dTj_size_.setZero();
+      dtagview_dK_.setZero();
+      return true;
+    }
+    
+    // Create residual - this allows to reuse the memory already assigned for this residual
+    bool Create(const anantak::AprilTagReadingType *tag_view, anantak::Pose3dState *poseC,
+        anantak::StaticAprilTagState *tagTj, anantak::CameraIntrinsicsState *camera,
+        bool is_zero_tag = false) {
+      if (tag_view->IsZero()) {
+        LOG(ERROR) << "Provided tag view is zero";
+        return false;
+      }
+      if (poseC->IsZero()) {
+        LOG(WARNING) << "Provided camera pose is zero";
+      }
+      if (tagTj->IsZero() && !is_zero_tag) {
+        LOG(WARNING) << "Provided non-origin tagTj pose is zero";
+      }
+      if (camera->IsZero()) {
+        LOG(ERROR) << "Provided camera is zero. Can not continue";
+        return false;
+      }
+      
+      // Reset the residual
+      Reset();
+      
+      // Assign pointers to states
+      tag_view_ = tag_view;     // Observation of tag corners
+      poseC_ = poseC;           // Camera pose in TagMap state
+      tagTj_ = tagTj;           // Tag pose in TagMap state
+      camera_ = camera;         // Camera intrinsics state
+      
+      // Calculate starting Residuals and Jacobians
+      if (!CalculateStartingResidualandJacobians()) {
+        LOG(ERROR) << "Could not calculate Jacobians. Exit.";
+        return false;
+      }
+      return true;
+    }
+    
+    // Create residual - along with options
+    bool Create(const anantak::AprilTagReadingType *tag_view, anantak::Pose3dState *poseC,
+        anantak::StaticAprilTagState *tagTj, anantak::CameraIntrinsicsState *camera,
+        AprilTagViewResidual::Options *options,
+        bool is_zero_tag = false) {
+      if (options->sigma_image < Epsilon) {
+        LOG(WARNING) << "Provided image corner sqrt variance is zero.";
+      }
+      options_ = *options;  // copy options as these are kept for life of the residual
+      return Create(tag_view, poseC, tagTj, camera, is_zero_tag);
+    }
+    
+    // Calculate starting estimates of Residual and Jacobians.
+    bool CalculateStartingResidualandJacobians() {
+      
+      Eigen::Matrix3d I3(Eigen::Matrix3d::Identity());
+      
+      Eigen::Quaterniond CiqT0(poseC_->Quaternion());
+      Eigen::Quaterniond TjqT0(tagTj_->pose_.Quaternion());
+      
+      Eigen::Vector3d T0pCi(poseC_->Position());
+      Eigen::Vector3d T0pTj(tagTj_->pose_.Position());
+      
+      Eigen::Matrix3d CirT0(CiqT0);
+      
+      Eigen::Quaterniond TjqCi = TjqT0 * CiqT0.conjugate();
+      Eigen::Vector3d T0CipTj = T0pTj - T0pCi;
+      Eigen::Vector3d CipTj = CirT0 * T0CipTj;
+      
+      Matrix6x6RowType CirT0CirT0;
+      CirT0CirT0.setZero();
+      CirT0CirT0.block<3,3>(0,0) =  CirT0;
+      CirT0CirT0.block<3,3>(3,3) =  CirT0;
+      
+      Matrix6x6RowType dCiposeTj_dT0poseTj;
+      dCiposeTj_dT0poseTj.setZero();
+      dCiposeTj_dT0poseTj = CirT0CirT0;
+      
+      Matrix6x6RowType dCiposeTj_dT0poseCi;
+      dCiposeTj_dT0poseCi.setZero();
+      dCiposeTj_dT0poseCi.block<3,3>(0,0) = -CirT0;
+      dCiposeTj_dT0poseCi.block<3,3>(3,0) =  CirT0*anantak::SkewSymmetricMatrix(T0CipTj);
+      dCiposeTj_dT0poseCi.block<3,3>(3,3) = -CirT0;
+      
+      Eigen::Matrix3d CirTj(TjqCi.conjugate());
+      Matrix3x4Type Tjpf = anantak::AprilTag3dCorners(tagTj_->size_.Value());
+      
+      Eigen::Matrix3d K = camera_->CameraMatrix();
+      double fx = K(0,0);
+      double fy = K(1,1);
+      double cx = K(0,2);
+      double cy = K(1,2);
+      
+      // Uncertainty in tag size
+      Matrix8x8RowType tag_size_cov_mat;
+      tag_size_cov_mat.setZero();
+      
+      for (int i_crnr=0; i_crnr<4; i_crnr++) {
+        
+        Eigen::Vector3d Tjpfk = Tjpf.col(i_crnr);
+        Eigen::Vector3d CiTjpfk = CirTj * Tjpfk;
+        Eigen::Vector3d Cipfk = CipTj + CiTjpfk;
+        double z_recip = Cipfk[2];
+        double x_by_z = Cipfk[0] * z_recip;
+        double y_by_z = Cipfk[1] * z_recip;
+        Eigen::Vector2d uv;
+        uv << fx*x_by_z + cx, fy*y_by_z + cy;
+        
+        Matrix2x4RowType duv_dK;
+        duv_dK << x_by_z, 0., 1., 0.,   0., y_by_z, 0., 1.;
+        
+        Matrix2x2RowType fxfy_by_z;
+        fxfy_by_z << fx*z_recip, 0.,   0., fy*z_recip;
+        
+        Matrix2x3RowType duv_dCiposnf;
+        duv_dCiposnf << 1., 0., -x_by_z,   0., 1., -y_by_z;
+        duv_dCiposnf = fxfy_by_z * duv_dCiposnf;
+        
+        Matrix3x6RowType dCiposnf_dCiposeTj;
+        dCiposnf_dCiposeTj.setZero();
+        dCiposnf_dCiposeTj.block<3,3>(0,0) = -anantak::SkewSymmetricMatrix(CiTjpfk);
+        dCiposnf_dCiposeTj.block<3,3>(0,3) =  I3;
+        
+        Eigen::Vector3d dCiposnf_dsizeTj = Tjpfk / tagTj_->size_.Value();
+        dCiposnf_dsizeTj = CirTj * dCiposnf_dsizeTj;
+        
+        dtagview_dK_.block<2,4>(2*i_crnr,0) =  duv_dK;
+        
+        dtagview_dposeC_.block<2,6>(2*i_crnr,0) = duv_dCiposnf * dCiposnf_dCiposeTj * dCiposeTj_dT0poseCi;
+        
+        dtagview_dposeT0toTj_.block<2,6>(2*i_crnr,0) = duv_dCiposnf * dCiposnf_dCiposeTj * dCiposeTj_dT0poseTj;
+        
+        dtagview_dTj_size_.block<2,1>(2*i_crnr,0) = duv_dCiposnf * dCiposnf_dsizeTj;
+        
+        // Residual is calculated as estimate - observation as jacobians are kept positive
+        tagview_residual_.block<2,1>(2*i_crnr,0) = uv - tag_view_->image_coords.col(i_crnr);
+        
+        Eigen::Matrix3d tag_size_cov = tagTj_->size_.covariance_ * tagTj_->size_.covariance_ * I3;
+        tag_size_cov = CirTj * tag_size_cov * CirTj.transpose();
+        tag_size_cov_mat.block<2,2>(2*i_crnr,2*i_crnr) = duv_dCiposnf * tag_size_cov * duv_dCiposnf.transpose();
+      }
+      
+      // Noises
+      // We neglect off-diagonal terms as we do not know how to calculate inv sqrt of a matrix.
+      Matrix8x1RowType dtagview_cov_diag =
+          options_.sigma_image * options_.sigma_image * Matrix8x1RowType::Ones()
+          + tag_size_cov_mat.diagonal();
+      // Convert this to inv sqrt variance to use it in scaling the residual and jacobians
+      dtagview_cov_diag = dtagview_cov_diag.cwiseSqrt().cwiseInverse();
+      
+      // Scale the residual and Jacobians
+      tagview_residual_     = dtagview_cov_diag.asDiagonal() * tagview_residual_;
+      dtagview_dposeC_      = dtagview_cov_diag.asDiagonal() * dtagview_dposeC_;
+      dtagview_dposeT0toTj_ = dtagview_cov_diag.asDiagonal() * dtagview_dposeT0toTj_;
+      dtagview_dTj_size_    = dtagview_cov_diag.asDiagonal() * dtagview_dTj_size_;
+      dtagview_dK_          = dtagview_cov_diag.asDiagonal() * dtagview_dK_;
+      
+      return true;
+    }
+    
+    // Check if the residual is ready for optimization
+    bool Check() {
+      return true;
+    }
+    
+    // Get ready for Optimization
+    bool GetReadyToOptimize() {
+      if (!Check()) {
+        LOG(ERROR) << "Check failed. Can not continue.";
+        return false;
+      }
+      // Set the errors to zero
+      //  Imu error state is set to zero elsewhere
+      tagTj_->SetErrorZero();
+      camera_->SetErrorZero();
+      return true;
+    }
+    
+    // Evaluate function for ceres solver
+    virtual bool Evaluate(
+        double const* const* parameters,
+        double* residuals,
+        double** jacobians) const {
+      
+      // Assuming Check() has been performed before
+      
+      // Mapping residuals and parameters to matrices: AprilTagVioResidual<8, 6,6,1,4>
+      MapVector8dType        tagview_resid(residuals);
+      MapConstVector6dType   dposeC(parameters[0]);
+      MapConstVector6dType   dposeT0toTj(parameters[1]);
+      MapConstVector1dType   dTj_size(parameters[2]);
+      MapConstVector4dType   dK(parameters[3]);
+      
+      /* Calculate residual from the error states. Linear model of the residual wrt error states
+       * is used to recalculate the residual. */
+      tagview_resid =
+          tagview_residual_
+          + dtagview_dposeC_ * dposeC
+          + dtagview_dposeT0toTj_ * dposeT0toTj
+          + dtagview_dTj_size_ * dTj_size
+          + dtagview_dK_ * dK;
+      
+      /* Jacobians are not recalculated with changing states. We use first estimates Jacobians
+       * as this shown to keep the estimator consistent. Also makes calculations faster.*/
+      if (jacobians != NULL) {
+        if (jacobians[0] != NULL) {
+          MapMatrix8x6RowType jac(jacobians[0]);
+          jac = dtagview_dposeC_;
+        }
+        if (jacobians[1] != NULL) {
+          MapMatrix8x6RowType jac(jacobians[1]);
+          jac = dtagview_dposeT0toTj_;
+        }
+        if (jacobians[2] != NULL) {
+          MapMatrix8x1RowType jac(jacobians[2]);
+          jac = dtagview_dTj_size_;
+        }
+        if (jacobians[3] != NULL) {
+          MapMatrix8x4RowType jac(jacobians[3]);
+          jac = dtagview_dK_;
+        }
+      }
+      
+      return true;
+    }
+    
+  };  // AprilTagViewResidual
   
   /** For first reading - this is not needed, we use constant parameter block instead */
   class ConvexFirstImuResidualFunction : public ceres::SizedCostFunction<7,3,3,3,3,3> {
@@ -9181,12 +9919,16 @@ class TagVIO11 {
     double starting_tag_position_sigma;
     
     // This is where we set the image stdev
+    AprilTagViewResidual::Options apriltag_view_residual_options;
     AprilTagVioResidual::Options apriltag_vio_residual_options;  
     
     // Camera to IMU pose residual options
     NoisyPosePrior::Options imu_to_cam_pose_prior_options;
     anantak::NoisyPoseResidual::Options imu_to_cam_pose_noise_options;
     anantak::NoisyPoseResidual::Options imu_to_cam_pose_change_options;
+    
+    // Camera to IMU pose residual options
+    anantak::RigidPoseWithImuResidual::Options rigid_imu_to_cam_pose_options;
     
     // Saving data options
     std::string save_filename;
@@ -9198,8 +9940,9 @@ class TagVIO11 {
     // Options that usually never change
     int32_t tags_set_num;        /**< Connect tag set map number used for VIO init. Keep at 0. */
     
-    Options(): integration_options(), apriltag_vio_residual_options(),
-        imu_to_cam_pose_noise_options(), imu_to_cam_pose_change_options() {
+    Options(): integration_options(), apriltag_view_residual_options(), apriltag_vio_residual_options(),
+        imu_to_cam_pose_noise_options(), imu_to_cam_pose_change_options(),
+        rigid_imu_to_cam_pose_options() {
       state_frequency = 25;
       imu_frequency = 100;
       max_states_history_queue_size = 1000;
@@ -9214,6 +9957,7 @@ class TagVIO11 {
       // integration_options...
       
       // VIO options
+      apriltag_view_residual_options.sigma_image = 1.0;
       apriltag_vio_residual_options.q_image = 0.5;
       
       // Starting state options
@@ -9232,6 +9976,11 @@ class TagVIO11 {
       // Camera to imu pose difference from prior 
       imu_to_cam_pose_prior_options.sigma_theta = 20.*RadiansPerDegree;   // in Radians
       imu_to_cam_pose_prior_options.sigma_position = 0.050;               // in meters
+      
+      // IMU to cam rigid pose options
+      rigid_imu_to_cam_pose_options.rate_of_change = false;              // Not a rate of change
+      rigid_imu_to_cam_pose_options.sigma_theta = 5.*RadiansPerDegree;  // in Radians
+      rigid_imu_to_cam_pose_options.sigma_position = 0.010;              // in meters
       
       // Camera to IMU pose noise options - change of pose from mean pose
       imu_to_cam_pose_noise_options.rate_of_change = false;              // Not a rate of change
@@ -9289,13 +10038,17 @@ class TagVIO11 {
   std::unique_ptr<anantak::CircularQueue<anantak::ImuState>> imu_states_;
   std::unique_ptr<anantak::CircularQueue<anantak::ImuResidualFunction>> imu_residuals_;
   std::unique_ptr<anantak::CircularQueue<anantak::Pose3dState>> cam_poses_;
+  std::unique_ptr<anantak::CircularQueue<anantak::RigidPoseWithImuResidual>> rigid_imu_to_cam_pose_residuals_;
+  std::unique_ptr<anantak::CircularQueue<anantak::AprilTagViewResidual>> tag_view_residuals_;
+  
   std::unique_ptr<anantak::CircularQueue<anantak::Pose3dState>> cam_to_imu_poses_;
-  std::unique_ptr<anantak::CircularQueue<anantak::ImuToCameraPoseResidual>> imu_cam_pose_residuals_;
+  std::unique_ptr<anantak::CircularQueue<anantak::ImuToCameraPoseResidual>> imu_cam_pose_residuals_;  
   std::unique_ptr<anantak::CircularQueue<anantak::NoisyPoseResidual>> noisy_imu_to_cam_pose_residuals_;
   std::unique_ptr<anantak::CircularQueue<anantak::NoisyPoseResidual>> noisy_imu_to_cam_pose_change_residuals_;
   anantak::Vector3dState gravity_state_;
   std::unique_ptr<anantak::CircularQueue<anantak::StaticAprilTagState>> tag_poses_;
   anantak::Pose3dState cam_to_imu_pose_;
+  anantak::Pose3dState tag_map_to_imu_world_pose_;
   anantak::Pose3dState tag_map_pose_;
   anantak::CameraIntrinsicsState camera_intrinsics_;
   std::unique_ptr<anantak::CircularQueue<anantak::AprilTagVioResidual>> tag_vio_residuals_;
@@ -9379,6 +10132,16 @@ class TagVIO11 {
     std::unique_ptr<anantak::CircularQueue<anantak::NoisyPoseResidual>> cq_noisy_imu_to_cam_pose_change_residuals_ptr(new
         anantak::CircularQueue<anantak::NoisyPoseResidual>(options_.max_cam_readings_for_initiation));
     noisy_imu_to_cam_pose_change_residuals_ = std::move(cq_noisy_imu_to_cam_pose_change_residuals_ptr);
+    
+    // RigidPoseWithImuResidual cq
+    std::unique_ptr<anantak::CircularQueue<anantak::RigidPoseWithImuResidual>> cq_rigid_imu_to_cam_pose_residuals_ptr(new
+        anantak::CircularQueue<anantak::RigidPoseWithImuResidual>(options_.max_cam_readings_for_initiation));
+    rigid_imu_to_cam_pose_residuals_ = std::move(cq_rigid_imu_to_cam_pose_residuals_ptr);
+    
+    // Allocate memory for tag view residuals
+    std::unique_ptr<anantak::CircularQueue<anantak::AprilTagViewResidual>> cq_tag_view_residuals(new
+        anantak::CircularQueue<anantak::AprilTagViewResidual>(options_.max_cam_readings_for_initiation));
+    tag_view_residuals_ = std::move(cq_tag_view_residuals);
     
     // Wall-clock states
     state_period_ = 100000 / options_.state_frequency;    // integer division
@@ -9484,6 +10247,587 @@ class TagVIO11 {
    * at each camera reading that are connected via imu readings.
    */
   bool Initiate() {
+    
+    // Traverse forward till first camera state is found that lies between imu states
+    int32_t cam_data_idx = 0;
+    int32_t imu_data_idx = 0;
+    bool found_starting = false;
+    while ((cam_data_idx<init_cam_readings_->n_msgs()-1 || imu_data_idx<init_imu_readings_->n_msgs()-2)
+           && !found_starting) {
+      found_starting = 
+        (init_cam_readings_->at(cam_data_idx).imu_interp.timestamp >= init_imu_readings_->at(imu_data_idx).timestamp)
+        && (init_cam_readings_->at(cam_data_idx).imu_interp.timestamp <= init_imu_readings_->at(imu_data_idx+1).timestamp);
+      if (!found_starting) {
+        bool cam_before = (init_cam_readings_->at(cam_data_idx).imu_interp.timestamp <
+            init_imu_readings_->at(imu_data_idx).timestamp);
+        bool cam_at_end = (cam_data_idx == init_cam_readings_->n_msgs()-1);
+        bool imu_at_end = (imu_data_idx == init_imu_readings_->n_msgs()-2);
+        if ((cam_before || imu_at_end) && !cam_at_end) cam_data_idx++;
+        if ((!cam_before || cam_at_end) && !imu_at_end) imu_data_idx++;
+      }
+    }
+    if (!found_starting) {
+      LOG(ERROR) << "Could not find overlapping camera and imu data, not expected. Exit.";
+      return false;
+    }
+    // Report starting of data overlap
+    VLOG(1) << "Found overlap between camera and imu data starting at cam, imu idxs = "
+        << cam_data_idx << ", " << imu_data_idx;
+    init_cam_data_starting_idx_ = cam_data_idx;
+    init_imu_data_starting_idx_ = imu_data_idx;
+    
+    // Increment imu idx to position after first camera timestamp
+    imu_data_idx++;
+    
+    // Make sure that more than two camera readings have been seen
+    if (init_cam_readings_->n_msgs()-1-cam_data_idx < 2) {
+      LOG(ERROR) << "Seen less than 2 states?! Exit. num cam msgs = "
+          << init_cam_readings_->n_msgs() << " starting cam index = " << cam_data_idx;
+      return false;
+    }
+    
+    // Find the starting state in the convex optimization data
+    bool starting_state_found = false;
+    int32_t starting_state_index = 0;
+    int32_t starting_cam_data_index = cam_data_idx;
+    while (!starting_state_found && starting_state_index<imu_init_tag_camera_->collected_readings_->n_msgs()) {
+      starting_state_found = (init_cam_readings_->at(cam_data_idx).imu_interp.timestamp ==
+          imu_init_tag_camera_->collected_readings_->at(starting_state_index).imu0.timestamp);
+    }
+    
+    if (starting_state_found) {
+      VLOG(1) << "Starting camera pose state was found at idx = " << starting_state_index
+          << " for cam data idx = " << starting_cam_data_index;      
+    } else {
+      LOG(ERROR) << "Starting state in collected camera data was not found in convex optimization "
+          << "results. Can not continue. Increase the size of convex optimization queues.";
+      return false;
+    }
+    
+    // Starting calculations
+    //  W = IMU world frame
+    //  W1 = IMU world frame in convex optimization
+    //  T0 = Tag map frame. Tag#0 is the origin
+    //  Ci = Camera pose at ith instance
+    //  Ii = IMU pose at ith instance
+    //  Tj = jth Tag pose
+    
+    // Create first camera state and set it
+    Eigen::Quaterniond C0qT0 = init_cam_readings_->at(cam_data_idx).cam_pose.quat.conjugate();
+    Eigen::Matrix3d C0rT0(C0qT0);
+    Eigen::Vector3d T0pC0 = init_cam_readings_->at(cam_data_idx).cam_pose.posn;
+    anantak::Pose3dState *cam_pose0 = cam_poses_->next_mutable_element();
+    cam_pose0->SetZero();
+    cam_pose0->Create(&C0qT0, &T0pC0, init_cam_readings_->at(cam_data_idx).cam_pose.timestamp);
+    
+    // Initiate the cam_to_imu_pose_ using data used in convex optimization
+    Eigen::Quaterniond CqI = imu_init_tag_camera_->imu_options_.CqI_measured;
+    Eigen::Matrix3d CrI(CqI);
+    Eigen::Vector3d IpC = -CrI.transpose() * imu_init_tag_camera_->imu_options_.CpI_measured;
+    cam_to_imu_pose_.Create(&CqI, &IpC);
+    
+    // Starting IMU rotation in IMU world frame
+    const AprilTagImuInitCamera::ImuCamInitType& ici =
+        imu_init_tag_camera_->collected_readings_->at(starting_state_index);
+    Eigen::Quaterniond I0qW(ici.imu0.quaternion.conjugate()); 
+    Eigen::Matrix3d I0rW(I0qW);
+    
+    // IMU world frame in Tag map frame
+    //  This serves as reference so is kept constant in this optimization
+    //  WqT0 = WqI0 * I0qC0 * C0qT0
+    Eigen::Quaterniond WqT0 = I0qW.conjugate() * CqI.conjugate() * C0qT0;
+    Eigen::Matrix3d WrT0(WqT0);
+    Eigen::Vector3d T0pW = Eigen::Vector3d::Zero();
+    tag_map_to_imu_world_pose_.SetZero();
+    tag_map_to_imu_world_pose_.Create(&WqT0, &T0pW);
+    
+    // Create first IMU state and set it
+    //  WpI0 = WpT0 + W.T0pC0 + W.C0pI0 = -WrT0*T0pW + WrT0*T0pC0 - WrT0*T0rC0*CrI*IpC
+    //       = WrT0*( -T0pW + T0pC0 - T0rC0*CrI*IpC)
+    Eigen::Vector3d WpI0 = WrT0*(-T0pW + T0pC0 - C0rT0.transpose()*CrI*IpC);
+    anantak::ImuState *imu_state0 = imu_states_->next_mutable_element();
+    imu_state0->SetZero();
+    imu_state0->SetTimestamp(init_cam_readings_->at(cam_data_idx).imu_interp.timestamp);
+    imu_state0->IqvG_ = I0qW.coeffs();
+    imu_state0->GpI_ = WpI0;
+    imu_state0->GvI_ = ici.solved_WvI;
+    imu_state0->bg_ = options_.starting_bg;
+    imu_state0->ba_ = imu_init_tag_camera_->imu_accel_bias_;
+    
+    // Set gravity state from convex optimization results
+    Eigen::Vector3d Wg = imu_init_tag_camera_->imu_gravity_;
+    gravity_state_.SetFromVector3d(&Wg);
+    
+    // Create next imu state and the first imu constraint, initiate them
+    anantak::ImuState *imu_state1 = imu_states_->next_mutable_element();
+    imu_state1->SetZero();
+    imu_state1->SetTimestamp(init_cam_readings_->at(cam_data_idx+1).imu_interp.timestamp);
+    // Create the first imu constraint
+    anantak::ImuResidualFunction *imu_residual0 = imu_residuals_->next_mutable_element();
+    imu_residual0->Create(imu_state0, imu_state1, &gravity_state_,
+        init_cam_readings_->at(cam_data_idx).imu_interp,
+        options_.integration_options);
+    
+    // Create the first imu-cam pose constraint, set it
+    anantak::RigidPoseWithImuResidual *rigid_imu_to_cam_pose0 = rigid_imu_to_cam_pose_residuals_->next_mutable_element();
+    rigid_imu_to_cam_pose0->Create(imu_state0, cam_pose0, &cam_to_imu_pose_, &tag_map_to_imu_world_pose_,
+        &options_.rigid_imu_to_cam_pose_options);
+    
+    /*// Create first camera state and constraint
+    anantak::Pose3dState *cam_to_imu_pose0 = cam_to_imu_poses_->next_mutable_element();
+    anantak::NoisyPoseResidual *noisy_i2c_pose_resid0 = noisy_imu_to_cam_pose_residuals_->next_mutable_element();
+    
+    // Set starting cam to imu pose to value from convex optimization
+    cam_to_imu_pose0->LqvG_ = CqI.coeffs();  // CqI
+    cam_to_imu_pose0->GpL_ = IpC; // IpC
+    cam_to_imu_pose0->timestamp_ = init_cam_readings_->at(cam_data_idx).imu_interp.timestamp;
+    
+    // Set constraints
+    //imu_cam_pose_resid0->Create(imu_state0, cam_pose0, &cam_to_imu_pose_, &imu_cam_residual_options_);
+    imu_cam_pose_resid0->Create(imu_state0, cam_pose0, cam_to_imu_pose0, &imu_cam_residual_options_);
+    noisy_i2c_pose_resid0->Create(&cam_to_imu_pose_, cam_to_imu_pose0, &options_.imu_to_cam_pose_noise_options);*/
+    
+    // Increment cam index as starting camera has been 'consumed'
+    cam_data_idx++;
+    
+    // Report at the beginning of states building
+    VLOG(1) << "Starting num of Imu states and constraints = " << imu_states_->n_msgs() << ", "
+        << imu_residuals_->n_msgs();
+    
+    // Traverse forward building the problem in the following way:
+    //  if this is a camera reading,
+    //    close the existing constraint
+    //    create a new imu constraint starting with this camera reading
+    //    create a new camera constraint
+    //  if this is a tag reading,
+    //    if there is an existing constraint (should be) add this reading to it
+    
+    // Statistics
+    int32_t num_cam_readings = 1; // counting the first camera reading 
+    int32_t num_imu_readings = 0;
+    int32_t num_equal_timestamps = 0;
+    
+    while (cam_data_idx<init_cam_readings_->n_msgs()-1 || imu_data_idx<init_imu_readings_->n_msgs()) {
+      // Decide if this is a camera or imu reading
+      bool cam_before = (init_cam_readings_->at(cam_data_idx).imu_interp.timestamp <=
+          init_imu_readings_->at(imu_data_idx).timestamp);
+      bool cam_at_end = (cam_data_idx == init_cam_readings_->n_msgs()-1);
+      bool imu_at_end = (imu_data_idx == init_imu_readings_->n_msgs());
+      
+      // This is an IMU reading
+      if ((!cam_before || cam_at_end) && !imu_at_end) {        
+        num_imu_readings++;
+        
+        // Add this reading to the current residual
+        anantak::ImuResidualFunction *imu_resid = imu_residuals_->mutable_element();
+        if (imu_resid->IsOpen()) {
+          if (!imu_resid->AddReading(init_imu_readings_->at(imu_data_idx))) {
+            LOG(ERROR) << "Could not add imu reading. Skipping it.";
+          }
+        } else {
+          LOG(ERROR) << "Expected the current residual to be open. Something is wrong. Exit";
+          return false;
+        }
+        
+        // Increment IMU index
+        imu_data_idx++;      
+      }
+      
+      // This is a camera reading
+      if ((cam_before || imu_at_end) && !cam_at_end) {
+        num_cam_readings++;
+        
+        // Create new camera state (Ci) and set it
+        Eigen::Quaterniond CiqT0 = init_cam_readings_->at(cam_data_idx).cam_pose.quat.conjugate();
+        Eigen::Matrix3d CirT0(CiqT0);
+        Eigen::Vector3d T0pCi = init_cam_readings_->at(cam_data_idx).cam_pose.posn;
+        anantak::Pose3dState *curr_cam_pose = cam_poses_->next_mutable_element();
+        curr_cam_pose->SetZero();
+        curr_cam_pose->Create(&CiqT0, &T0pCi, init_cam_readings_->at(cam_data_idx).cam_pose.timestamp);
+        
+        // Set the ending IMU state (Ii)
+        //  IiqW = IiqCi * CiqT0 * T0qW = IqC * CiqT0 * T0qW
+        //  WpIi = WpT0 + W.T0pCi + W.CipIi = -WrT0*T0pW + WrT0*T0pCi - WrT0*T0rCi*CrI*IpC
+        //       = WrT0*( -T0pW + T0pCi - T0rCi*CrI*IpC)
+        Eigen::Quaterniond IiqW = CqI.conjugate() * CiqT0 * WqT0.conjugate();
+        Eigen::Vector3d WpIi = WrT0*(-T0pW + T0pCi - CirT0.transpose()*CrI*IpC);
+        anantak::ImuState *curr_imu_state = imu_states_->mutable_element();
+        if (curr_imu_state->timestamp_ != init_cam_readings_->at(cam_data_idx).imu_interp.timestamp) {
+          LOG(ERROR) << "Expected imu_state timestamp to be equal to init_cam_readings_ ts. Exit. i="
+              << cam_data_idx;
+          return false;
+        }
+        //curr_imu_state->SetZero();
+        //curr_imu_state->SetTimestamp(init_cam_readings_->at(cam_data_idx).imu_interp.timestamp);
+        curr_imu_state->IqvG_ = IiqW.coeffs();
+        curr_imu_state->GpI_ = WpIi;
+        int32_t state_idx = cam_data_idx - init_cam_data_starting_idx_ + starting_state_index;
+        curr_imu_state->GvI_ = imu_init_tag_camera_->collected_readings_->at(state_idx).solved_WvI;
+        curr_imu_state->bg_ = options_.starting_bg;
+        curr_imu_state->ba_ = imu_init_tag_camera_->imu_accel_bias_;
+        
+        // Imu to cam rigid pose constraint
+        anantak::RigidPoseWithImuResidual *rigid_imu_to_cam_pose = rigid_imu_to_cam_pose_residuals_->next_mutable_element();
+        rigid_imu_to_cam_pose->Create(curr_imu_state, curr_cam_pose, &cam_to_imu_pose_, &tag_map_to_imu_world_pose_,
+            &options_.rigid_imu_to_cam_pose_options);
+        
+        // Close the last imu constraint (i-1), do not propagate state
+        anantak::ImuResidualFunction *last_imu_resid = imu_residuals_->mutable_element();
+        if (last_imu_resid->IsOpen()) {
+          if (!last_imu_resid->AddEndStateReading(init_cam_readings_->at(cam_data_idx).imu_interp)) {
+            LOG(ERROR) << "Could not close state by adding interp cam reading. Exit. i="
+                << cam_data_idx;
+            return false;
+          }
+        } else {
+          LOG(ERROR) << "Expected the current residual to be open. Could not close it. Exit";
+          return false;
+        }
+        
+        // Create next IMU state and initiate it
+        anantak::ImuState *next_imu_state = imu_states_->next_mutable_element();
+        next_imu_state->SetZero();
+        next_imu_state->SetTimestamp(init_cam_readings_->at(cam_data_idx+1).imu_interp.timestamp);
+        
+        // Add a new imu constraint between last and next states
+        anantak::ImuResidualFunction *curr_imu_resid = imu_residuals_->next_mutable_element();
+        curr_imu_resid->Create(curr_imu_state, next_imu_state, &gravity_state_,
+            init_cam_readings_->at(cam_data_idx).imu_interp,
+            options_.integration_options);        
+        
+        // If timestamps of camera and imu reading are equal, we skip the imu reading
+        if (init_cam_readings_->at(cam_data_idx).imu_interp.timestamp
+            == init_imu_readings_->at(imu_data_idx).timestamp) {
+          num_equal_timestamps++;
+          if (!imu_at_end) imu_data_idx++;
+        }
+        // Increment camera index
+        cam_data_idx++;
+      }
+      
+    }
+    // Report
+    VLOG(1) << "Number of camera and imu readings seen: " << num_cam_readings << ", "
+        << num_imu_readings << " Equal timestamps: " << num_equal_timestamps;
+    VLOG(1) << "Number of IMU states created = " << imu_states_->n_msgs();
+    VLOG(1) << "Number of IMU constraints added = " << imu_residuals_->n_msgs();
+    VLOG(1) << "Number of Camera poses added = " << cam_poses_->n_msgs();
+    VLOG(1) << "Number of imu-to-cam rigid residuals added = " << rigid_imu_to_cam_pose_residuals_->n_msgs();
+    /*VLOG(1) << "Number of Camera constraints added = " << imu_cam_pose_residuals_->n_msgs();
+    VLOG(1) << "Number of imu-to-cam poses added = " << cam_to_imu_poses_->n_msgs();
+    VLOG(1) << "Number of imu-to-cam residuals added = " << noisy_imu_to_cam_pose_residuals_->n_msgs();
+    VLOG(1) << "Number of imu-to-cam change residuals added = " << noisy_imu_to_cam_pose_change_residuals_->n_msgs();*/
+    
+    // Create a prior for cam-to-imu pose
+    NoisyPosePrior cam_to_imu_pose_prior_;
+    cam_to_imu_pose_prior_.Create(&CqI, &IpC, &cam_to_imu_pose_, &options_.imu_to_cam_pose_prior_options);
+    
+    // Create a prior for gravity state
+    Vector3dPrior::Options gravity_vec_prior_options;
+    gravity_vec_prior_options.sigma_position = std::sqrt(options_.integration_options.qg);
+    Vector3dPrior gravity_vec_prior;
+    gravity_vec_prior.Create(&Wg, &gravity_state_, &gravity_vec_prior_options);
+    
+    VLOG(1) << "Preparing constraints and states for optimization.";
+    
+    // Prepare all imu constraints for optimization
+    //  Any un-closed constraints will not be used for optimization
+    int32_t num_open_residuals = 0;
+    int32_t num_ready_to_optimize = 0;
+    int32_t min_integral_history = 1000; // IMU residual should never have more than 1000 readings.
+    int32_t max_integral_history = 0;
+    int32_t total_integrals_history = 0;
+    float avg_integral_history = 0.;
+    int32_t min_readings = 1000; // IMU residual should never have more than 1000 readings.
+    int32_t max_readings = 0;
+    int32_t total_readings = 0;
+    float avg_readings = 0.;
+    for (int i=0; i<imu_residuals_->n_msgs(); i++) {
+      if (!imu_residuals_->at(i).IsOpen()) {
+        if (!imu_residuals_->at(i).GetReadyToOptimize()) {
+          LOG(ERROR) << "A closed residual is not ready for optimization. Can not continue.";
+          return false;
+        } else {
+          num_ready_to_optimize++;
+          min_integral_history = std::min(min_integral_history, imu_residuals_->at(i).num_integrals_stored_);
+          max_integral_history = std::max(min_integral_history, imu_residuals_->at(i).num_integrals_stored_);
+          total_integrals_history += imu_residuals_->at(i).num_integrals_stored_;
+          min_readings = std::min(min_readings, imu_residuals_->at(i).num_readings_);
+          max_readings = std::max(max_readings, imu_residuals_->at(i).num_readings_);
+          total_readings += imu_residuals_->at(i).num_readings_;
+        }
+      } else {
+        VLOG(1) << "Found an open constraint at idx = " << i;
+        num_open_residuals++;
+      }
+    }
+    avg_integral_history = float(total_integrals_history) / float(num_ready_to_optimize);
+    avg_readings = float(total_readings) / float(num_ready_to_optimize);
+    VLOG(1) << "Number of imu residuals ready to optimize = " << num_ready_to_optimize
+        << ", num open = " << num_open_residuals;
+    VLOG(1) << "Residuals can store max history length = " << imu_residuals_->front().max_integrals_history_;
+    VLOG(1) << "Integrals history stored min, max, avg per residual= " << min_integral_history << " "
+        << max_integral_history << " " << avg_integral_history;
+    VLOG(1) << "Number of min, max, avg readings per residual = " << min_readings << " "
+        << max_readings << " " << avg_readings;
+        
+    // Prepare the imu-to-cam pose prior for optimization
+    if (!cam_to_imu_pose_prior_.GetReadyToOptimize()) {
+      LOG(ERROR) << "Could not get cam_to_imu_pose_prior_ ready for optimization";
+      return false;
+    }
+    
+    // Prepare imu-cam-poses for optimization
+    for (int i=0; i<rigid_imu_to_cam_pose_residuals_->n_msgs(); i++) {
+      if (!rigid_imu_to_cam_pose_residuals_->at(i).GetReadyToOptimize()) {
+        LOG(ERROR) << "Rigid pose residual at i = " << i << " could not be readied for optimization";
+      }
+    }    
+    
+    // Prepare gravity prior
+    if (!gravity_vec_prior.GetReadyToOptimize()) {
+      LOG(ERROR) << "Could not get gravity_vec_prior ready for optimization";
+      return false;      
+    }
+    
+    VLOG(1) << "Done preparing states and residuals for optimization";
+    
+    // Save the starting states to a file for plotting and check integrals (for testing)
+    SaveStatesToFile(options_.save_filename, "init1");
+    SaveResidualsToFile(options_.save_filename, "init1");
+    
+    // Setup the problem
+    //  All camera poses are constant
+    //  WqT0, T0pW are constant
+    // Priors for accel biases are created
+    // Priors for gravity are created
+    
+    // Build a problem by adding all constraints to it
+    ceres::Problem::Options problem_options;
+    problem_options.cost_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
+    ceres::Problem problem(problem_options);
+    
+    // Use imu residuals we created before. Do not transfer ownership
+    for (int i=0; i<imu_residuals_->n_msgs(); i++) {
+      if (!imu_residuals_->at(i).IsOpen()) {
+        ceres::CostFunction* i_residual = &imu_residuals_->at(i);
+        ceres::LossFunction* quad_loss = NULL;
+        problem.AddResidualBlock(
+          i_residual,
+          quad_loss,
+          imu_residuals_->at(i).state0_->error_,
+          imu_residuals_->at(i).state1_->error_,
+          imu_residuals_->at(i).gravity_->error_
+        );
+      }
+    }
+    
+    // Add imu-to-cam noisy pose residuals
+    for (int i=0; i<rigid_imu_to_cam_pose_residuals_->n_msgs(); i++) {
+      ceres::CostFunction* i_residual = &rigid_imu_to_cam_pose_residuals_->at(i);
+      ceres::LossFunction* quad_loss = NULL;
+      problem.AddResidualBlock(
+        i_residual,
+        quad_loss,
+        rigid_imu_to_cam_pose_residuals_->at(i).poseI_->error_,
+        rigid_imu_to_cam_pose_residuals_->at(i).poseC_->error_,
+        rigid_imu_to_cam_pose_residuals_->at(i).poseItoC_->error_,
+        rigid_imu_to_cam_pose_residuals_->at(i).poseT0toW_->error_
+      );
+    }
+    
+    /*// Add imu-to-cam noisy pose change residuals
+    for (int i=0; i<noisy_imu_to_cam_pose_change_residuals_->n_msgs(); i++) {
+      ceres::CostFunction* i_residual = &noisy_imu_to_cam_pose_change_residuals_->at(i);
+      ceres::LossFunction* quad_loss = NULL;
+      problem.AddResidualBlock(
+        i_residual,
+        quad_loss,
+        noisy_imu_to_cam_pose_change_residuals_->at(i).expectation_->error_,
+        noisy_imu_to_cam_pose_change_residuals_->at(i).measurement_->error_
+      );
+    }*/
+    
+    // Add a prior for imu-to-cam pose
+    {
+      ceres::CostFunction* i_residual = &cam_to_imu_pose_prior_;
+      ceres::LossFunction* quad_loss = NULL;
+      problem.AddResidualBlock(
+        i_residual,
+        quad_loss,
+        cam_to_imu_pose_prior_.measurement_->error_
+      );
+    }
+    
+    // Add a prior for gravity pose
+    {
+      ceres::CostFunction* i_residual = &gravity_vec_prior;
+      ceres::LossFunction* quad_loss = NULL;
+      problem.AddResidualBlock(
+        i_residual,
+        quad_loss,
+        gravity_vec_prior.measurement_->error_
+      );
+    }
+    
+    // Set camera poses as constants
+    for (int i=0; i<cam_poses_->n_msgs(); i++) {
+      problem.SetParameterBlockConstant(cam_poses_->at(i).error_);      
+    }
+    
+    // Set IMU World in Tag map pose as constant
+    problem.SetParameterBlockConstant(tag_map_to_imu_world_pose_.error_);
+    
+    // Solve the problem
+    ceres::Solver::Options solver_options;
+    solver_options.max_num_iterations = 300;
+    solver_options.minimizer_progress_to_stdout = true;
+    ceres::Solver::Summary solver_summary;
+    ceres::Solve(solver_options, &problem, &solver_summary);
+    if (true) std::cout << solver_summary.FullReport() << std::endl;    
+    
+    // Calculate covariances
+    VLOG(1) << "Calculating covariances";
+    Eigen::Matrix3d imu_gravity_cov_; Eigen::Vector3d imu_gravity_stdev_;
+    Eigen::Matrix<double,6,6> cam_imu_pose_cov_; Eigen::Matrix<double,6,1> cam_imu_pose_stdev_;
+    ceres::Covariance::Options covariance_options;
+    ceres::Covariance covariance(covariance_options);
+    std::vector<std::pair<const double*, const double*>> covariance_blocks;
+    covariance_blocks.push_back(std::make_pair(gravity_state_.error_, gravity_state_.error_));
+    covariance_blocks.push_back(std::make_pair(cam_to_imu_pose_.error_, cam_to_imu_pose_.error_));
+    CHECK(covariance.Compute(covariance_blocks, &problem));
+    covariance.GetCovarianceBlock(gravity_state_.error_, gravity_state_.error_, imu_gravity_cov_.data());
+    covariance.GetCovarianceBlock(cam_to_imu_pose_.error_, cam_to_imu_pose_.error_, cam_imu_pose_cov_.data());
+    
+    imu_gravity_stdev_ = imu_gravity_cov_.diagonal().cwiseSqrt();
+    cam_imu_pose_stdev_ = cam_imu_pose_cov_.diagonal().cwiseSqrt();
+    
+    // Recalculate states, this also sets all error states to zero
+    VLOG(1) << "Recalculating states";
+    gravity_state_.Recalculate();
+    cam_to_imu_pose_.Recalculate();
+    tag_map_to_imu_world_pose_.Recalculate();
+    for (int i=0; i<imu_states_->n_msgs(); i++) {imu_states_->at(i).Recalculate();}
+    for (int i=0; i<cam_poses_->n_msgs(); i++) {cam_poses_->at(i).Recalculate();}
+    
+    // Report results
+    VLOG(1) << "IMU estimates:";
+    VLOG(1) << "Gravity = " << gravity_state_.Gp_.transpose() << ", " << gravity_state_.Gp_.norm() << " (m/s^2)";
+    VLOG(1) << "Gravity stdev = " << imu_gravity_stdev_.transpose() << " (m/s^2)";
+    VLOG(1) << "Gravity = " << gravity_state_.Gp_.transpose()/options_.integration_options.accel_factor << ", "
+        << gravity_state_.Gp_.norm()/options_.integration_options.accel_factor << " (LSB)";
+    VLOG(1) << "Gravity stdev = " << imu_gravity_stdev_.transpose()/options_.integration_options.accel_factor << " (LSB)";
+    
+    VLOG(1) << "Cam-Imu pose = " << cam_to_imu_pose_.GpL_.transpose() << " (m)";
+    VLOG(1) << "Cam-Imu pose stdev = " << cam_imu_pose_stdev_.block<3,1>(0,0).transpose() << " (m)";
+    Eigen::AngleAxisd c2iaa(cam_to_imu_pose_.Quaternion());
+    VLOG(1) << "Cam-Imu pose aa = " << c2iaa.axis().transpose() << ", " << c2iaa.angle()*DegreesPerRadian << " (deg)";
+    VLOG(1) << "Cam-Imu pose aa stdev = " << cam_imu_pose_stdev_.block<3,1>(3,0).transpose()*DegreesPerRadian << " (deg)";
+    
+    SaveStatesToFile(options_.save_filename, "init2");
+    SaveResidualsToFile(options_.save_filename, "init2");
+    
+    
+    ///////  Now we redo the same problem with Tag Views in place of fixed cam poses  ////////
+    
+    // Initiate the tag poses in tag map
+    int32_t num_tags = imu_init_tag_camera_->tag_camera_.connected_tags_sizes_[options_.tags_set_num];
+    for (int i_tag=0; i_tag<num_tags; i_tag++) {
+      const AprilTagCamera::TagCompositePose& tag_comp_pose =
+          imu_init_tag_camera_->tag_camera_.tag_poses_[options_.tags_set_num]->at(i_tag);
+      double size = LookupTagSize(tag_comp_pose.tag_id);
+      Eigen::Quaterniond TjqT0 = tag_comp_pose.pose.rotn_q.conjugate();
+      Eigen::Vector3d T0pTj = tag_comp_pose.pose.posn;
+      // Create a new tag_pose state
+      anantak::StaticAprilTagState *tag_pose = tag_poses_->next_mutable_element();
+      tag_pose->Create(&tag_comp_pose.tag_id, &TjqT0, &T0pTj, &size);
+      // Set the covariances
+      Eigen::Matrix<double,6,1> pose_stdev;
+      pose_stdev <<  options_.starting_tag_angle_sigma, options_.starting_tag_angle_sigma, options_.starting_tag_angle_sigma,
+          options_.starting_tag_position_sigma, options_.starting_tag_position_sigma, options_.starting_tag_position_sigma;
+      tag_pose->pose_.covariance_ = pose_stdev.asDiagonal();
+      tag_pose->size_.covariance_ = options_.default_april_tag_size_sigma;
+    }
+    // Report
+    VLOG(1) << "Number of tags initiated in map = " << num_tags;
+    for (int i=0; i<num_tags; i++) {
+      VLOG(2) << "  " << tag_poses_->at(i).tag_id_ << " "
+          << tag_poses_->at(i).pose_.Quaternion().coeffs().transpose() << " "
+          << tag_poses_->at(i).pose_.Position().transpose() << " "
+          << tag_poses_->at(i).size_.Value();
+    }
+    SaveTagMapToFile(options_.save_filename, "init2");
+    
+    // Create camera intrinsics state
+    Eigen::Matrix3d K_mat = imu_init_tag_camera_->tag_camera_.camera_K_;
+    camera_intrinsics_.Create(&K_mat);
+    VLOG(1) << "Starting camera matrix = \n" << camera_intrinsics_.CameraMatrix();
+    
+    int32_t found_cam_idx = 0;
+    VLOG(1) << "Num of April tags seen = " << april_tag_readings_->n_msgs();
+    
+    // Create Tag view states for each camera pose
+    for (int i_tag_rdng=0; i_tag_rdng<april_tag_readings_->n_msgs(); i_tag_rdng++) {
+    //for (int i_tag_rdng=0; i_tag_rdng<100; i_tag_rdng++) {
+      
+      anantak::AprilTagReadingType *tag_rdng = april_tag_readings_->at_ptr(i_tag_rdng);
+      anantak::Pose3dState *poseC = NULL;
+      anantak::StaticAprilTagState *tagTj = NULL;
+      
+      // Find the corresponding cam state
+      bool found_cam = FindTimestampInCamPoses(tag_rdng->timestamp, &poseC, found_cam_idx);
+      if (poseC) {
+        //
+      } else {
+        LOG(WARNING) << "Did not find cam pose. Not expected.";
+        continue;
+      }
+      
+      // Find this tag in list of tags
+      bool found_tag = FindTagInTagMap(tag_rdng->tag_id, &tagTj);
+      if (tagTj) {
+        //VLOG(3) << "Found tag in map. tag_id = " << tag_rdng->tag_id << " " << tagTj->tag_id_;
+      } else {
+        LOG(WARNING) << "Did not find tag in tag map. Not expected. tag_id = " << tag_rdng->tag_id;
+        continue;
+      }
+      
+      //bool Create(const anantak::AprilTagReadingType *tag_view, anantak::Pose3dState *poseC,
+      //    anantak::StaticAprilTagState *tagTj, anantak::CameraIntrinsicsState *camera,
+      //    AprilTagVioResidual::Options *options, bool is_zero_tag = false)
+      anantak::AprilTagViewResidual *tag_view_resid = tag_view_residuals_->next_mutable_element();
+      bool created = tag_view_resid->Create(tag_rdng, poseC, tagTj, &camera_intrinsics_,
+          &options_.apriltag_view_residual_options);
+      if (!created) {
+        LOG(ERROR) << "Could not create tag view residual. Skipping.";
+        continue;
+      }
+      
+      // Check the residual after creation if needed
+      
+    }
+    // Report
+    VLOG(1) << "Created tag view residuals. num = " << tag_view_residuals_->n_msgs()
+        << " of total views = " << april_tag_readings_->n_msgs();
+    
+    // Find origin tag in tag map
+    anantak::StaticAprilTagState *origin_tag = NULL;
+    bool found_origin = FindOriginTagInTagMap(&origin_tag);
+    if (!origin_tag) {
+      LOG(ERROR) << "Could not find the origin tag in tagmap. Quitting.";
+      return false;
+    }
+    
+    
+    
+    return true;
+  }
+  
+  /* Initiate2
+   * Solve a VIO problem on the past data. Camera poses are kept constant. States are created
+   * at each camera reading that are connected via imu readings.
+   */
+  bool Initiate2() {
     
     // Traverse forward till first camera state is found that lies between imu states
     int32_t cam_data_idx = 0;
@@ -10004,6 +11348,28 @@ class TagVIO11 {
       }
     }
     return found_constraint;
+  }
+  
+  // Find the camera pose using timestamp
+  bool FindTimestampInCamPoses(const int64_t& ts, anantak::Pose3dState **poseC,
+      int32_t& search_idx) {
+    // Simple linear search starting from the search index.
+    bool found_pose = false;
+    *poseC = NULL;
+    search_idx = std::min(std::max(0, search_idx), cam_poses_->n_msgs()-1);
+    while (!found_pose && search_idx>=0 && search_idx<cam_poses_->n_msgs()) {
+      found_pose = (ts == cam_poses_->at(search_idx).timestamp_);
+      if (found_pose) {
+        *poseC = cam_poses_->at_ptr(search_idx);
+      } else {
+        if (ts < cam_poses_->at(search_idx).timestamp_) {
+          search_idx--;
+        } else if (ts > cam_poses_->at(search_idx).timestamp_) {
+          search_idx++;
+        }
+      }
+    }
+    return found_pose;
   }
   
   // Look for the given tag_id in tag_poses_. Return a pointer to tag pose state
@@ -10926,6 +12292,7 @@ class TagVIO11 {
   }
   
   bool SaveStatesToFile(const std::string& save_filename, const std::string& predicate) {
+    
     // Initial IMU states. Create a matrix, copy all imu states and save
     Eigen::Matrix<double,16,Eigen::Dynamic> states_mat;
     int32_t num_states = imu_states_->n_msgs();
@@ -10934,7 +12301,8 @@ class TagVIO11 {
       Eigen::Map<Eigen::Matrix<double,16,1>> state_map(imu_states_->at(i).state_);
       states_mat.col(i) = state_map;
     }
-    anantak::WriteMatrixToCSVFile(save_filename+"."+predicate+".imu_states", states_mat.transpose());
+    anantak::WriteMatrixToCSVFile(save_filename+"."+predicate+".imu_states_raw", states_mat.transpose());
+    
     // Initial cam poses
     Eigen::Matrix<double,7,Eigen::Dynamic> cam_poses;
     num_states = cam_poses_->n_msgs();
@@ -10944,14 +12312,46 @@ class TagVIO11 {
       cam_poses.col(i) = cam_poses_map;
     }
     anantak::WriteMatrixToCSVFile(save_filename+"."+predicate+".cam_poses", cam_poses.transpose());
-    // imu-to-cam poses
+    
+    // IMU states transformed in Tag map frame.
+    // IMU states are IqW, WpI, WvI, bg, ba
+    //  IqT0 = IqW * WqT0
+    //  T0pI = T0rW * (WpI - WpT0) = T0rW*WpI + T0pW
+    //  T0vI = T0rW * WvI
+    //  bg and ba do not change
+    // Imu to cam pose can now be calculated
+    //  CqI = CqT0 * T0qI
+    //  IpC = IrT0 * (T0pC - T0pI) 
+    Eigen::Quaterniond WqT0 = tag_map_to_imu_world_pose_.Quaternion();
+    Eigen::Matrix3d T0rW(WqT0.conjugate());
+    Eigen::Vector3d T0pW = tag_map_to_imu_world_pose_.Position();
+    
     Eigen::Matrix<double,7,Eigen::Dynamic> cam_to_imu_poses;
-    num_states = cam_to_imu_poses_->n_msgs();
+    
+    num_states = std::min(imu_states_->n_msgs(), cam_poses_->n_msgs());
+    states_mat.resize(16,num_states);
     cam_to_imu_poses.resize(7,num_states);
+    
     for (int i=0; i<num_states; i++) {
-      Eigen::Map<Eigen::Matrix<double,7,1>> cam_to_imu_poses_map(cam_to_imu_poses_->at(i).state_);
-      cam_to_imu_poses.col(i) = cam_to_imu_poses_map;
+      // IMU states
+      Eigen::Quaterniond IqT0 = imu_states_->at(i).Quaternion() * WqT0;
+      Eigen::Matrix3d IrT0(IqT0);
+      Eigen::Vector3d T0pI = T0rW*imu_states_->at(i).Position() + T0pW;
+      states_mat.col(i).block<4,1>(0,0) = IqT0.coeffs();
+      states_mat.col(i).block<3,1>(4,0) = T0pI;
+      states_mat.col(i).block<3,1>(7,0) = T0rW*imu_states_->at(i).GvI_;
+      states_mat.col(i).block<3,1>(10,0) = imu_states_->at(i).bg_;
+      states_mat.col(i).block<3,1>(13,0) = imu_states_->at(i).ba_;
+      
+      // Cam to imu poses
+      Eigen::Quaterniond CqI = cam_poses_->at(i).Quaternion() * IqT0.conjugate();
+      Eigen::Vector3d IpC = IrT0*(cam_poses_->at(i).Position() - T0pI);
+      Eigen::AngleAxisd CaI(CqI);
+      cam_to_imu_poses.col(i).block<3,1>(0,0) = CaI.axis();
+      cam_to_imu_poses.col(i)[3] = CaI.angle()*DegreesPerRadian;
+      cam_to_imu_poses.col(i).block<3,1>(4,0) = IpC;
     }
+    anantak::WriteMatrixToCSVFile(save_filename+"."+predicate+".imu_states", states_mat.transpose());
     anantak::WriteMatrixToCSVFile(save_filename+"."+predicate+".camimu_poses", cam_to_imu_poses.transpose());
     
     return true;
@@ -11090,26 +12490,26 @@ class TagVIO11 {
   bool ProcessImuAndAprilTagMessages(const std::vector<anantak::SensorMsg>& imu_msgs,
       const std::vector<anantak::SensorMsg>& tag_msgs) {
     
-    bool imu_init_tag_camera_is_sleeping = imu_init_tag_camera_->IsSleeping();
-    
-    // Send data to IMU init
-    if (state_==kInitiateIMU && !imu_init_tag_camera_is_sleeping) {
-      imu_init_tag_camera_->ProcessImuAndAprilTagMessages(imu_msgs, tag_msgs);
-      CollectDataForInitiation(imu_msgs, tag_msgs);
-    } else
-    // Initiate VIO
-    if (state_==kInitiateIMU && imu_init_tag_camera_is_sleeping) {
-      LOG(INFO) << "Initiating VIO";
-      state_ = kInitiateVIO;
-      if (Initiate()) {
-        state_ = kRunningVIO;
-      } else {
-        LOG(WARNING) << "Could not initiate VIO, can not continue.";
-        return false;
+    if (state_==kInitiateIMU) {
+      // Send data to IMU init
+      if (!imu_init_tag_camera_->IsSleeping()) {
+        imu_init_tag_camera_->ProcessImuAndAprilTagMessages(imu_msgs, tag_msgs);
+        CollectDataForInitiation(imu_msgs, tag_msgs);
       }
-    } else
+      // Initiate VIO
+      if (imu_init_tag_camera_->IsSleeping()) {
+        LOG(INFO) << "Initiating VIO";
+        state_ = kInitiateVIO;
+        if (Initiate()) {
+          state_ = kRunningVIO;
+        } else {
+          LOG(WARNING) << "Could not initiate VIO, can not continue.";
+          return false;
+        }
+      }
+    }
     // Run single cam VIO
-    if (state_==kRunningVIO) {
+    else if (state_==kRunningVIO) {
       VLOG(1) << "Running single cam VIO";
     } 
     // Something is wrong

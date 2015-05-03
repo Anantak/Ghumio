@@ -17,6 +17,10 @@
 /** anantak header includes */
 #include "ComponentCommander/component_commander.h"
 
+// Config file to use
+DEFINE_string(config_filename, "../src/test/test_node.cfg",
+    "Configuration file to use for this commander");
+
 /** Global variable that holds the status of the child process when child terminates
  *  This should help clean up zombie processes. See http://advancedlinuxprogramming.com/ Ch3
  */
@@ -54,7 +58,7 @@ int main(int argc, char** argv) {
 
   /** Instantiate the Component Commander */
   std::string program_name = "ProgramCommander";
-  std::string programs_setup_filename = "../src/test/test_node.cfg";
+  std::string programs_setup_filename = FLAGS_config_filename;
   std::string command_subscriber_name = "ManualCommands";
   std::string exit_command = "COMMAND ProgramCommander exit";
   std::string status_query_subscriber_name = "ProgramCommanderStatusQueries";
