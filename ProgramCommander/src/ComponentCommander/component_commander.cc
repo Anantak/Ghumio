@@ -124,12 +124,25 @@ bool ComponentCommander::Initialize() {
     if (program_settings.has_status_type()) {
       const std::string& program_status_type = program_settings.status_type();
       VLOG(1) << "  " << program_status_type;
+      
       // Allocate memory for status keeper
-      std::unique_ptr<anantak::ComponentStatusKeeper> ptr =
-        component_status_keeper_factory_.CreateComponentStatusKeeper(
-            program_status_type, program_name);
-      // Transfer object ptr to map. ptr will be 'gone' after move
-      status_keepers_map_[program_name] = std::move(ptr);
+      if (program_settings.has_component_template()) {
+        LOG(INFO) << "Using component template = " << program_settings.component_template();
+        std::unique_ptr<anantak::ComponentStatusKeeper> temp_ptr(new anantak::ComponentStatusKeeper(program_name,
+            program_settings.component_template()));
+        status_keepers_map_[program_name] = std::move(temp_ptr);   // class member pointer now owns the keeper
+      } else {
+        std::unique_ptr<anantak::ComponentStatusKeeper> temp_ptr(new anantak::ComponentStatusKeeper(program_name));
+        status_keepers_map_[program_name] = std::move(temp_ptr);   // class member pointer now owns the keeper      
+      }
+      
+      // Allocate memory for status keeper
+      //std::unique_ptr<anantak::ComponentStatusKeeper> ptr =
+      //  component_status_keeper_factory_.CreateComponentStatusKeeper(
+      //      program_status_type, program_name);
+      //// Transfer object ptr to map. ptr will be 'gone' after move
+      //status_keepers_map_[program_name] = std::move(ptr);
+      
       // Initiate the next query poll time to -1
       next_status_query_time_map_[program_name] = -1;   // this is not used
       // Startup set to automatic if startup_direction == "auto start"

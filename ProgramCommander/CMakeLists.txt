@@ -18,7 +18,8 @@ find_package(Boost 1.55 REQUIRED)
 # use sse3 instruction set
 #SET(CMAKE_CXX_FLAGS "-march=native -msse3 -O3")
 # C++11 std
-add_definitions("-march=native -msse3 -O2 -std=c++0x") 
+#add_definitions("-march=native -msse4 -O3 -std=c++0x") 
+add_definitions("-msse4 -O3 -std=c++0x") 
 # make release version
 set(CMAKE_BUILD_TYPE Release)
 
@@ -52,6 +53,7 @@ include_directories(
   ${PROJECT_SOURCE_DIR}/build
   ${PROJECT_SOURCE_DIR}/src/Thirdparty
   ${PROJECT_SOURCE_DIR}/src/Thirdparty/cv2cg
+  /usr/include/flycapture
 )
 
 # set source files
@@ -72,6 +74,14 @@ set(SOURCE_FILES
   ${PROJECT_SOURCE_DIR}/src/Filter/message_factory.cc
 )
 
+# set source files
+set(COMPONENT_SOURCE_FILES
+  ${ProtoSources}
+  ${PROJECT_SOURCE_DIR}/src/Utilities/common_functions.cc
+  ${PROJECT_SOURCE_DIR}/src/ComponentCommander/component_commander.cc
+  ${PROJECT_SOURCE_DIR}/src/ComponentCommander/component_status_keeper.cc
+)
+
 # libviso2 source files
 FILE(GLOB LIBVISO2_SRC_FILES "${PROJECT_SOURCE_DIR}/src/Thirdparty/libviso2/*.cpp")
 
@@ -79,71 +89,91 @@ FILE(GLOB LIBVISO2_SRC_FILES "${PROJECT_SOURCE_DIR}/src/Thirdparty/libviso2/*.cp
 
 add_executable(test_component_commander src/test/test_component_commander.cc ${SOURCE_FILES})
 target_link_libraries(test_component_commander ${GLOG_LIBRARIES})
-target_link_libraries(test_component_commander ${GFLAGS_LIBRARIES})
+target_link_libraries(test_component_commander gflags)
 target_link_libraries(test_component_commander ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_component_commander ${ZMQ_LIBRARIES})
 target_link_libraries(test_component_commander ${CTEMPLATE_LIBRARIES})
 
 add_executable(test_component src/test/test_component.cc ${SOURCE_FILES})
 target_link_libraries(test_component ${GLOG_LIBRARIES})
-target_link_libraries(test_component ${GFLAGS_LIBRARIES})
+target_link_libraries(test_component gflags)
 target_link_libraries(test_component ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_component ${ZMQ_LIBRARIES})
 target_link_libraries(test_component ${CTEMPLATE_LIBRARIES})
 
 add_executable(test_message_queue src/test/test_message_queue.cc ${SOURCE_FILES})
 target_link_libraries(test_message_queue ${GLOG_LIBRARIES})
-target_link_libraries(test_message_queue ${GFLAGS_LIBRARIES})
+target_link_libraries(test_message_queue gflags)
 target_link_libraries(test_message_queue ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_message_queue ${ZMQ_LIBRARIES})
 target_link_libraries(test_message_queue ${CTEMPLATE_LIBRARIES})
 
 add_executable(test_data_queue src/test/test_data_queue.cc ${SOURCE_FILES})
 target_link_libraries(test_data_queue ${GLOG_LIBRARIES})
-target_link_libraries(test_data_queue ${GFLAGS_LIBRARIES})
+target_link_libraries(test_data_queue gflags)
 target_link_libraries(test_data_queue ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_data_queue ${ZMQ_LIBRARIES})
 target_link_libraries(test_data_queue ${CTEMPLATE_LIBRARIES})
 
-add_executable(test_message_file_readwrite src/test/test_message_file_readwrite.cc ${SOURCE_FILES})
-target_link_libraries(test_message_file_readwrite ${GLOG_LIBRARIES})
-target_link_libraries(test_message_file_readwrite ${GFLAGS_LIBRARIES})
-target_link_libraries(test_message_file_readwrite ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_message_file_readwrite ${ZMQ_LIBRARIES})
-target_link_libraries(test_message_file_readwrite ${CTEMPLATE_LIBRARIES})
+#add_executable(test_message_file_readwrite src/test/test_message_file_readwrite.cc ${SOURCE_FILES})
+#target_link_libraries(test_message_file_readwrite ${GLOG_LIBRARIES})
+#target_link_libraries(test_message_file_readwrite gflags)
+#target_link_libraries(test_message_file_readwrite ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_message_file_readwrite ${ZMQ_LIBRARIES})
+#target_link_libraries(test_message_file_readwrite ${CTEMPLATE_LIBRARIES})
 
 add_executable(test_data_publisher src/test/test_data_publisher.cc ${SOURCE_FILES})
 target_link_libraries(test_data_publisher ${GLOG_LIBRARIES})
-target_link_libraries(test_data_publisher ${GFLAGS_LIBRARIES})
+target_link_libraries(test_data_publisher gflags)
 target_link_libraries(test_data_publisher ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_data_publisher ${ZMQ_LIBRARIES})
 target_link_libraries(test_data_publisher ${CTEMPLATE_LIBRARIES})
 
 add_executable(test_filter src/test/test_filter.cc ${SOURCE_FILES})
 target_link_libraries(test_filter ${GLOG_LIBRARIES})
-target_link_libraries(test_filter ${GFLAGS_LIBRARIES})
+target_link_libraries(test_filter gflags)
 target_link_libraries(test_filter ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_filter ${ZMQ_LIBRARIES})
 target_link_libraries(test_filter ${CTEMPLATE_LIBRARIES})
 
-add_executable(test_monocular_features_tracker src/test/test_monocular_features_tracker.cc
-    ${SOURCE_FILES} ${LIBVISO2_SRC_FILES})
-target_link_libraries(test_monocular_features_tracker ${GLOG_LIBRARIES})
-target_link_libraries(test_monocular_features_tracker ${GFLAGS_LIBRARIES})
-target_link_libraries(test_monocular_features_tracker ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_monocular_features_tracker ${ZMQ_LIBRARIES})
-target_link_libraries(test_monocular_features_tracker ${CTEMPLATE_LIBRARIES})
-target_link_libraries(test_monocular_features_tracker ${OpenCV_LIBS})
+#add_executable(test_monocular_features_tracker src/test/test_monocular_features_tracker.cc
+#    ${SOURCE_FILES} ${LIBVISO2_SRC_FILES})
+#target_link_libraries(test_monocular_features_tracker ${GLOG_LIBRARIES})
+#target_link_libraries(test_monocular_features_tracker gflags)
+#target_link_libraries(test_monocular_features_tracker ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_monocular_features_tracker ${ZMQ_LIBRARIES})
+#target_link_libraries(test_monocular_features_tracker ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_monocular_features_tracker ${OpenCV_LIBS})
 
 add_executable(test_batch_vio src/Models/test_batch_vio.cc ${SOURCE_FILES})
 target_link_libraries(test_batch_vio ${GLOG_LIBRARIES})
-target_link_libraries(test_batch_vio ${GFLAGS_LIBRARIES})
+target_link_libraries(test_batch_vio gflags)
 target_link_libraries(test_batch_vio ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_batch_vio ${ZMQ_LIBRARIES})
 target_link_libraries(test_batch_vio ${CTEMPLATE_LIBRARIES})
 target_link_libraries(test_batch_vio ${CERES_LIBRARIES})
 target_link_libraries(test_batch_vio ${BOOST_LIBRARIES})
 target_link_libraries(test_batch_vio opengv)
+
+add_executable(test_sync_images_broadcaster
+  src/test/test_sync_images_broadcaster.cc
+  src/ImagesBroadcaster/sync_images_broadcaster.cc ${COMPONENT_SOURCE_FILES})
+target_link_libraries(test_sync_images_broadcaster ${GLOG_LIBRARIES})
+target_link_libraries(test_sync_images_broadcaster gflags)
+target_link_libraries(test_sync_images_broadcaster ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_sync_images_broadcaster ${ZMQ_LIBRARIES})
+target_link_libraries(test_sync_images_broadcaster ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_sync_images_broadcaster flycapture-c flycapture)
+
+add_executable(test_show_save_images
+  src/test/test_show_save_images.cc
+  src/ImagesBroadcaster/show_save_images.cc ${COMPONENT_SOURCE_FILES})
+target_link_libraries(test_show_save_images ${GLOG_LIBRARIES})
+target_link_libraries(test_show_save_images gflags)
+target_link_libraries(test_show_save_images ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_show_save_images ${ZMQ_LIBRARIES})
+target_link_libraries(test_show_save_images ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_show_save_images ${OpenCV_LIBS})
 
 # old executables - may no longer compile
 

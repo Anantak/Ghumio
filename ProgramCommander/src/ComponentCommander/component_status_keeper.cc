@@ -35,6 +35,17 @@ namespace anantak {
 /** Constructor creates a ComponentStatusKeeper object with default settings */
 ComponentStatusKeeper::ComponentStatusKeeper(std::string component_name) {
   component_name_ = component_name;
+  display_template_filename_ = "src/ComponentCommander/component_status.tpl";
+  Initiate();
+}
+
+ComponentStatusKeeper::ComponentStatusKeeper(std::string component_name, std::string display_template_filename) {
+  component_name_ = component_name;
+  display_template_filename_ = display_template_filename;
+  Initiate();
+}
+
+bool ComponentStatusKeeper::Initiate() {
   status_query_interval_ = (int64_t) 2000000;
   raise_warning_interval_ = (int64_t) 4000000;
   assume_dead_interval_ = (int64_t) 6000000;
@@ -51,9 +62,9 @@ ComponentStatusKeeper::ComponentStatusKeeper(std::string component_name) {
   last_status_time_ = (int64_t) 0;
   start_command_ = "COMMAND " + component_name_ + " start";
   exit_command_ = "COMMAND " + component_name_ + " exit";
-  display_template_filename_ = "src/ComponentCommander/component_status.tpl";
+  display_template_name_ = component_name_ + "_tpl";
   if (LoadDisplayTemplate()) {
-    ctemplate::StringToTemplateCache("panel_tpl", display_template_.c_str(), ctemplate::DO_NOT_STRIP);
+    ctemplate::StringToTemplateCache(display_template_name_.c_str(), display_template_.c_str(), ctemplate::DO_NOT_STRIP);
   }
   this_process_id_ = int32_t(getpid());
   component_process_id_ = 0;
@@ -63,6 +74,8 @@ ComponentStatusKeeper::ComponentStatusKeeper(std::string component_name) {
   VLOG(3) << "Exit command = " << exit_command_;
   VLOG(3) << "Start time = " << start_time_;
   VLOG(3) << "Display template = " << display_template_;
+  
+  return true;
 }
 
 /** Destructs the ComponentStatusKeeper */
@@ -296,7 +309,7 @@ std::unique_ptr<std::string> ComponentStatusKeeper::GenerateDisplayPanel() {
   dict.SetValue("component_name", component_name_);
   dict.SetValue("status", "Unknown");
   dict.SetValue("up_time", "Unknown");
-  ctemplate::ExpandTemplate("panel_tpl", ctemplate::DO_NOT_STRIP, &dict,
+  ctemplate::ExpandTemplate(display_template_name_.c_str(), ctemplate::DO_NOT_STRIP, &dict,
       panel_str.get()); /** unfortunately using .get() here. This works but might be risky if
                          * ctemplate system is going to keep pointers to the string */
   VLOG(3) << "Display panel for " << component_name_ << "\n" << *panel_str;

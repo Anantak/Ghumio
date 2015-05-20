@@ -17,6 +17,7 @@ message ProgramsSetup {
     optional string startup_direction = 4;
     optional int32 startup_sequence = 5;
     optional string config_file = 6;
+    optional string component_template = 7;
     
     enum ConnectionType {
       STATUS = 0;

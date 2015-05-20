@@ -77,3 +77,45 @@ message FilterConfig {
   repeated Model model = 50;              // There are many models in a filter
   
 }
+
+message ImagesBroadcasterConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  optional int32 num_cameras = 30;              // number of cameras to connect to
+  optional int32 frame_rate = 31;               // frame rate to use usually 30Hz or 60 Hz
+  optional int32 image_width = 32;              // image width e.g. 640 for VGA resolution
+  optional int32 image_height = 33;             // image height e.g. 480 for VGA resolution
+  optional int32 image_depth = 34;              // 3 for color and 1 for monochrome
+  optional int32 image_size = 35;               // number of bytes in image = width*height*depth = 921600 for VGA colored
+  
+  message PointGreyCamera {
+    required string name = 1;
+    required int64 id = 2;
+  }
+  repeated PointGreyCamera pg_camera = 40;      // Cameras to get data from
+}
+
+message ImagesProcessorConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  optional string images_broadcaster_name = 22;       // name of the images broadcaster subscription
+  
+  optional int32 num_cameras = 30;              // number of cameras to connect to
+  optional int32 image_width = 32;              // image width e.g. 640 for VGA resolution
+  optional int32 image_height = 33;             // image height e.g. 480 for VGA resolution
+  optional int32 image_depth = 34;              // 3 for color and 1 for monochrome
+  optional int32 image_size = 35;               // number of bytes in image = width*height*depth = 921600 for VGA colored
+  
+  message CameraToProcess {
+    required string name = 1;
+    required int32 num = 2;
+  }
+  repeated CameraToProcess camera = 40;      // Cameras to get data from
+}
