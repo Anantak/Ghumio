@@ -48,8 +48,8 @@ var process_id = process.pid;
 
 server.listen(3000);
 
-app.use('/javascript', express.static(__dirname + '/javascript'));
-app.use('/stylesheet', express.static(__dirname + '/stylesheet'));
+app.use('/javascript', express.static('javascript'));
+app.use('/stylesheet', express.static('stylesheet'));
 
 app.get('/', function (req, res) {
   res.send(page_rendering)

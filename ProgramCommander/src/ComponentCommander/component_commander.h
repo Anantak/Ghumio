@@ -17,7 +17,7 @@
 
 // include other headers
 #include "ComponentCommander/component_status_keeper.h"
-#include "ComponentCommander/component_status_keeper_factory.h"
+//#include "ComponentCommander/component_status_keeper_factory.h"
 
 // Include protocol buffers
 #include "programs_setup.pb.h"
@@ -97,7 +97,7 @@ class ComponentCommander {
   anantak::ProgramsSetup::ProgramSettings this_program_settings_;
   
   /** Status Keeper Factory to create StatusKeepers */
-  anantak::ComponentStatusKeeperFactory component_status_keeper_factory_;
+  //anantak::ComponentStatusKeeperFactory component_status_keeper_factory_;
   
   /** Status Keepers Map - one for each component to be managed
    *  We keep unique_ptr to status keeper objects as we want to have objects derived from keepers

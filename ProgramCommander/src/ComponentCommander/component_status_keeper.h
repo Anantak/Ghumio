@@ -34,6 +34,11 @@ class ComponentStatusKeeper {
   /** Constructor creates a ComponentStatusKeeper object with default settings */
   ComponentStatusKeeper(std::string component_name);
   
+  /** Same as above with a different template **/
+  ComponentStatusKeeper(std::string component_name, std::string display_template_filename);
+  
+  bool Initiate();
+  
   /** Destructs the ComponentStatusKeeper */
   virtual ~ComponentStatusKeeper();
   
@@ -153,6 +158,7 @@ class ComponentStatusKeeper {
   
   // Display Panel variables
   std::string display_template_filename_;  /**< Filename of the display template */
+  std::string display_template_name_;  /**< Filename of the display template */
   std::string display_template_;           /**< Display template as string loaded from file */
   bool LoadDisplayTemplate();              /**< Function to load the display template from file */
   
