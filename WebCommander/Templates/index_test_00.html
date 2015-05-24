@@ -6,17 +6,17 @@
   <link rel="stylesheet" href="/stylesheet/webcommander.css">
   <script src="/socket.io/socket.io.js"></script>
   <script src="javascript/jquery.min.js"></script>
+  <script src="javascript/canvas.js"></script>
   <script>
     var socket = io.connect('http://localhost:3000');
     socket.on('fromServer', function (data) {
-      console.log(data);
+      //console.log(data);
       var function_name = "update_" + data.name;
       window[function_name](data);
       //socket.emit('fromBrowser', { 'component' : data.name });
     });
     socket.on('apriltag', function(data) {
-      var d = JSON.parse(data);
-      console.log(d);
+      handleSensorMsg(JSON.parse(data));
     });
     function send_to_server(data) {
       socket.emit('fromBrowser', data);
@@ -27,7 +27,8 @@
   <div class="PanelsContainer" id="PanelsContainer">
     {% autoescape false %}{{Panels}}{% endautoescape %}
   </div>
+  <div id="CanvasDisplay" align="center">
+    <canvas id="main-display" class="display-canvas" height="512" width="1024">
+  </div>
 </body>
 </html>
-
-

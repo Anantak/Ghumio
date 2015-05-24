@@ -163,3 +163,7 @@ span {
   background-color: #FFFF66;
 }
 
+.display-canvas {
+  border: 1px solid #ccc;
+  margin: 1em;
+}
