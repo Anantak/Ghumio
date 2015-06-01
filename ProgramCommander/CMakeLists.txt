@@ -165,7 +165,7 @@ target_link_libraries(test_monocular_features_tracker ${OpenCV_LIBS})
 
 add_executable(test_batch_vio src/Models/test_batch_vio.cc ${SOURCE_FILES})
 target_link_libraries(test_batch_vio ${GLOG_LIBRARIES})
-target_link_libraries(test_batch_vio gflags)
+target_link_libraries(test_batch_vio ${GFLAGS_LIBRARIES})
 target_link_libraries(test_batch_vio ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_batch_vio ${ZMQ_LIBRARIES})
 target_link_libraries(test_batch_vio ${CTEMPLATE_LIBRARIES})
@@ -224,6 +224,17 @@ target_link_libraries(test_front_rangers_monitor ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_front_rangers_monitor ${ZMQ_LIBRARIES})
 target_link_libraries(test_front_rangers_monitor ${CTEMPLATE_LIBRARIES})
 target_link_libraries(test_front_rangers_monitor usb)
+
+add_executable(machine_model src/Models/machine_model.cc ${SOURCE_FILES})
+target_link_libraries(machine_model ${GLOG_LIBRARIES})
+target_link_libraries(machine_model ${GFLAGS_LIBRARIES})
+target_link_libraries(machine_model ${PROTOBUF_LIBRARIES})
+target_link_libraries(machine_model ${ZMQ_LIBRARIES})
+target_link_libraries(machine_model ${CTEMPLATE_LIBRARIES})
+target_link_libraries(machine_model ${CERES_LIBRARIES})
+target_link_libraries(machine_model ${BOOST_LIBRARIES})
+target_link_libraries(machine_model opengv)
+
 
 # old executables - may no longer compile
 

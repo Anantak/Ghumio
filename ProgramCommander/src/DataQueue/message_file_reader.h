@@ -5,6 +5,8 @@
  *  File is closed only at the end.
  */
 
+#pragma once
+
 /** std includes */
 #include <string>
 #include <memory>
