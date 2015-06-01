@@ -26,7 +26,7 @@ class MessageFileWriter {
   virtual ~MessageFileWriter();
   
   /** Open a file for writing */
-  bool Open(std::string filename);
+  bool Open(const std::string& filename);
   
   /** Write a message - message is passed as const reference. Memory is owned by calling function,
    *  it is not deallocated here. Returns true on success. */
