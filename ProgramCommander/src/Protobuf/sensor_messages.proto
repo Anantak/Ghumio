@@ -23,6 +23,8 @@ message SensorMsg {
   optional AprilTagMessage april_msg = 13;
   optional MonocularSparsePointsMsg mono_sparse_points_msg = 14;
   optional MonocularPinholeCalibrationNoDistortionMsg mono_calib_no_distort_msg = 15;
+  optional PixyCameraMessage pixy_cam_msg = 16;
+  optional RangeMessage range_msg = 17;
 }
 
 /** Data request - reply is a composite message */
@@ -106,4 +108,25 @@ message MonocularPinholeCalibrationNoDistortionMsg {
   optional double cy = 104;
 }
 
+/** Pixy IR camera messages */
+message PixyCameraMessage {
+  // A single block
+  message Block {
+   required uint32 type = 1;
+   required uint32 signature = 2;
+   required uint32 x = 3;
+   required uint32 y = 4;
+   required uint32 width = 5;
+   required uint32 height = 6;
+  }
+  repeated Block blocks = 10;
+}
+
+/** Range message - this measures distance to an object from a ranger **/
+message RangeMessage {
+  required uint32 ranger_num = 101;
+  required uint32 range = 102;
+  required uint32 delay = 103;
+  optional int32 code = 104;
+}
 

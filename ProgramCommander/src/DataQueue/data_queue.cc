@@ -147,6 +147,10 @@ bool DataQueue::Initiate() {
     subscribers_to_be_created.push_back(sensor.name());
     n_sensor_msgs_received_[sensor.name()] = 0;
     subscriber_type_[sensor.name()] = kSensor;
+    if (sensor.has_data_file()) {
+      message_queue_data_file_[sensor.name()] = sensor.data_file();
+      LOG(INFO) << "Setting data_file for sensor " << sensor.name() << " to be " << sensor.data_file();
+    }
   }
   for (int i=0; i<config->data_subscriber_size(); i++) {
     const anantak::DataQueueConfig::DataSubscriber& data_subscriber = config->data_subscriber(i);
@@ -196,6 +200,7 @@ bool DataQueue::Initiate() {
   else loop_frequency_ = 100.0;  // Hz
   exit_loop_ = false;
   exit_command_str_ = "COMMAND " + component_name_ + " exit";
+  save_command_str_ = "COMMAND " + component_name_ + " save";
   max_loop_frequency_ = 0.0f;
   
   /** Performance tracking */
@@ -301,7 +306,26 @@ std::unique_ptr<std::string> DataQueue::AssembleStatusString() {
 /** Handle commands coming from the commander subscriber */
 bool DataQueue::HandleCommand(std::unique_ptr<std::string> cmd) {
   // exit command
-  if (*cmd == exit_command_str_) exit_loop_ = true;
+  if (*cmd == exit_command_str_) {exit_loop_ = true;}
+  else if (*cmd == save_command_str_) {SaveSensorMessageQueues();}
+  return true;
+}
+
+// Go through each message queue and save its contents to file
+bool DataQueue::SaveSensorMessageQueues() {
+  for (auto i_map = message_queue_data_file_.begin(); i_map != message_queue_data_file_.end();
+      i_map++) {
+    VLOG(2) << "Saving messages to file " << i_map->second;
+    std::map<std::string, std::unique_ptr<anantak::MessageQueue>>::iterator mq_it =
+        message_queue_map_.find(i_map->first);
+    if (mq_it == message_queue_map_.end()) {
+      LOG(ERROR) << "Could not find the message queue for file " << i_map->second;
+      continue;
+    }
+    if (!mq_it->second->SaveSensorMessagesToFile(i_map->second)) {
+      LOG(ERROR) << "There was a problem in saving sensor messages to file.";
+    }
+  }
   return true;
 }
 

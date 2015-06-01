@@ -13,6 +13,7 @@ message DataQueueConfig {
     optional int32 queue_length = 2;
     optional bool track = 3;
     optional int32 track_length = 4;
+    optional string data_file = 5;
   }
   message DataSubscriber {
     required string name = 1;
@@ -118,4 +119,38 @@ message ImagesProcessorConfig {
     required int32 num = 2;
   }
   repeated CameraToProcess camera = 40;      // Cameras to get data from
+  
+  message BeaconDetector {
+    required string tag_publisher_name = 1;
+    required string tag_publisher_subject = 2;
+    optional int32 num_tags = 3;
+    optional string blob_publisher_name = 4;
+    optional string blob_publisher_subject = 5;
+    optional int32 num_blobs = 6;
+  }
+  optional BeaconDetector beacon_detector = 45;
+}
+
+message PixyCameraConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  optional string symlink = 30;                 // symlink of the pixy camera
+  optional int32 image_width = 32;              // image width e.g. 320 for pixy
+  optional int32 image_height = 33;             // image height e.g. 200 for pixy
+  optional int32 image_depth = 34;              // 3 for color and 1 for monochrome
+  optional int32 image_size = 35;               // number of bytes in image = width*height*depth = 921600 for VGA colored  
+}
+
+message SerialMonitorConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  optional string symlink = 30;           // symlink of the serial connection
 }

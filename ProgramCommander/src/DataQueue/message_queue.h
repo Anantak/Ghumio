@@ -129,6 +129,11 @@ class MessageQueue {
    */
   bool ChangeMaxQueueSize(int32_t new_max_queue_size);
   
+  /** Save messages to a file assuming that these are sensor messages
+   * Creates sensor messages from strings and save them to the given data file.
+   */
+  bool SaveSensorMessagesToFile(const std::string& filename);
+  
   /** Start/stop tracking performance */
   bool StartTrackingPerformance(int32_t track_length);
   bool StopTrackingPerformance();

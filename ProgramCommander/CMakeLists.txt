@@ -5,7 +5,7 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 set(CMAKE_MODULE_PATH   ${PROJECT_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
 
-find_package(gflags REQUIRED)
+find_package(Gflags REQUIRED)
 find_package(Glog REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(ZMQ REQUIRED)
@@ -13,7 +13,14 @@ find_package(Ctemplate REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Ceres REQUIRED)
-find_package(Boost 1.55 REQUIRED)
+#find_package(Boost 1.55 REQUIRED)
+# Includes for Pixy Camera - should we keep adding to this CMakeLists? Or should all be separate?
+find_package(libpixyusb REQUIRED)
+find_package(libusb-1.0 REQUIRED)
+find_package(Boost 1.55 COMPONENTS thread system chrono REQUIRED)
+find_package(UDev REQUIRED)
+
+# Packages needed for building the pixycam
 
 # use sse3 instruction set
 #SET(CMAKE_CXX_FLAGS "-march=native -msse3 -O3")
@@ -35,9 +42,14 @@ PROTOBUF_GENERATE_CPP(ProtoSources ProtoHeaders ${ProtoFiles})
 # configure header files
 configure_file(${PROJECT_SOURCE_DIR}/src/Utilities/common_config.h.in ${PROJECT_SOURCE_DIR}/build/common_config.h)
 
+# Add OpenGV's library
 SET(OPENGV_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/src/Thirdparty/opengv/include)
 add_library(opengv SHARED IMPORTED)
 set_target_properties(opengv PROPERTIES IMPORTED_LOCATION ${PROJECT_SOURCE_DIR}/src/Thirdparty/opengv/lib/libopengv.so)
+
+# Add AprilTag library from Prof. Edwin Olson
+SET(APRILTAG_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/src/Thirdparty/apriltag)
+SET(APRILTAG_LIBRARY ${PROJECT_SOURCE_DIR}/src/Thirdparty/apriltag/libapriltag.a)
 
 # include directories
 include_directories(
@@ -54,6 +66,12 @@ include_directories(
   ${PROJECT_SOURCE_DIR}/src/Thirdparty
   ${PROJECT_SOURCE_DIR}/src/Thirdparty/cv2cg
   /usr/include/flycapture
+  ${APRILTAG_INCLUDE_DIR}
+  # Pixy camera includes - should this be separated?
+  ${LIBPIXYUSB_0_INCLUDE_DIR}
+  ${LIBUSB_1_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIR}
+  ${UDEV_INCLUDE_DIRS}
 )
 
 # set source files
@@ -136,14 +154,14 @@ target_link_libraries(test_filter ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_filter ${ZMQ_LIBRARIES})
 target_link_libraries(test_filter ${CTEMPLATE_LIBRARIES})
 
-#add_executable(test_monocular_features_tracker src/test/test_monocular_features_tracker.cc
-#    ${SOURCE_FILES} ${LIBVISO2_SRC_FILES})
-#target_link_libraries(test_monocular_features_tracker ${GLOG_LIBRARIES})
-#target_link_libraries(test_monocular_features_tracker gflags)
-#target_link_libraries(test_monocular_features_tracker ${PROTOBUF_LIBRARIES})
-#target_link_libraries(test_monocular_features_tracker ${ZMQ_LIBRARIES})
-#target_link_libraries(test_monocular_features_tracker ${CTEMPLATE_LIBRARIES})
-#target_link_libraries(test_monocular_features_tracker ${OpenCV_LIBS})
+add_executable(test_monocular_features_tracker EXCLUDE_FROM_ALL src/test/test_monocular_features_tracker.cc
+    ${SOURCE_FILES} ${LIBVISO2_SRC_FILES})
+target_link_libraries(test_monocular_features_tracker ${GLOG_LIBRARIES})
+target_link_libraries(test_monocular_features_tracker gflags)
+target_link_libraries(test_monocular_features_tracker ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_monocular_features_tracker ${ZMQ_LIBRARIES})
+target_link_libraries(test_monocular_features_tracker ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_monocular_features_tracker ${OpenCV_LIBS})
 
 add_executable(test_batch_vio src/Models/test_batch_vio.cc ${SOURCE_FILES})
 target_link_libraries(test_batch_vio ${GLOG_LIBRARIES})
@@ -159,7 +177,7 @@ add_executable(test_sync_images_broadcaster
   src/test/test_sync_images_broadcaster.cc
   src/ImagesBroadcaster/sync_images_broadcaster.cc ${COMPONENT_SOURCE_FILES})
 target_link_libraries(test_sync_images_broadcaster ${GLOG_LIBRARIES})
-target_link_libraries(test_sync_images_broadcaster gflags)
+target_link_libraries(test_sync_images_broadcaster ${GFLAGS_LIBRARIES})
 target_link_libraries(test_sync_images_broadcaster ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_sync_images_broadcaster ${ZMQ_LIBRARIES})
 target_link_libraries(test_sync_images_broadcaster ${CTEMPLATE_LIBRARIES})
@@ -169,11 +187,43 @@ add_executable(test_show_save_images
   src/test/test_show_save_images.cc
   src/ImagesBroadcaster/show_save_images.cc ${COMPONENT_SOURCE_FILES})
 target_link_libraries(test_show_save_images ${GLOG_LIBRARIES})
-target_link_libraries(test_show_save_images gflags)
+target_link_libraries(test_show_save_images ${GFLAGS_LIBRARIES})
 target_link_libraries(test_show_save_images ${PROTOBUF_LIBRARIES})
 target_link_libraries(test_show_save_images ${ZMQ_LIBRARIES})
 target_link_libraries(test_show_save_images ${CTEMPLATE_LIBRARIES})
 target_link_libraries(test_show_save_images ${OpenCV_LIBS})
+target_link_libraries(test_show_save_images ${APRILTAG_LIBRARY})
+
+add_executable(test_pixy_camera src/test/test_pixy_camera.cc
+  src/PixyBroadcaster/pixy_camera_component.cc ${COMPONENT_SOURCE_FILES})
+target_link_libraries(test_pixy_camera ${LIBPIXYUSB_0_LIBRARY}) # libpixyusb should always come before libboost and libusb #
+target_link_libraries(test_pixy_camera ${GLOG_LIBRARIES})
+target_link_libraries(test_pixy_camera ${GFLAGS_LIBRARIES})
+target_link_libraries(test_pixy_camera ${Boost_LIBRARIES})
+target_link_libraries(test_pixy_camera ${LIBUSB_1_LIBRARIES})
+target_link_libraries(test_pixy_camera ${UDEV_LIBRARIES})
+target_link_libraries(test_pixy_camera ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_pixy_camera ${ZMQ_LIBRARIES})
+target_link_libraries(test_pixy_camera ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_pixy_camera ${OpenCV_LIBS})
+
+add_executable(test_beacon_serial_monitor src/test/test_beacon_serial_monitor.cc
+  src/SerialBroadcaster/beacon_serial_monitor.cc ${COMPONENT_SOURCE_FILES})
+target_link_libraries(test_beacon_serial_monitor ${GLOG_LIBRARIES})
+target_link_libraries(test_beacon_serial_monitor ${GFLAGS_LIBRARIES})
+target_link_libraries(test_beacon_serial_monitor ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_beacon_serial_monitor ${ZMQ_LIBRARIES})
+target_link_libraries(test_beacon_serial_monitor ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_beacon_serial_monitor usb)
+
+add_executable(test_front_rangers_monitor src/test/test_front_rangers_monitor.cc
+  src/SerialBroadcaster/front_rangers_monitor.cc ${COMPONENT_SOURCE_FILES})
+target_link_libraries(test_front_rangers_monitor ${GLOG_LIBRARIES})
+target_link_libraries(test_front_rangers_monitor ${GFLAGS_LIBRARIES})
+target_link_libraries(test_front_rangers_monitor ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_front_rangers_monitor ${ZMQ_LIBRARIES})
+target_link_libraries(test_front_rangers_monitor ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_front_rangers_monitor usb)
 
 # old executables - may no longer compile
 

@@ -589,7 +589,7 @@ bool SyncImagesBroadcaster::GrabAndPublishImages() {
     int grab_images = 1; // setting to not capture by default. To start capture, set to 1.
     int exit_now = 0;
     
-    int log_level = 1; // 0 = no logging, 1 = some logging, 2 = verbose;
+    int log_level = 0; // 0 = no logging, 1 = some logging, 2 = verbose;
 
     i = 0; 
     char cmnd_msg [256];

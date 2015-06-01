@@ -126,6 +126,10 @@ class DataQueue {
     gettimeofday (&tv, NULL);
     return (int64_t) (tv.tv_sec * 1000000 + tv.tv_usec);  
   }
+  
+  std::string save_command_str_;  /**< Commands string that represents exit */
+  std::map<std::string, std::string> message_queue_data_file_;  /**< Subject of subscriber */
+  bool SaveSensorMessageQueues();
 };
   
 } // namespace anantak

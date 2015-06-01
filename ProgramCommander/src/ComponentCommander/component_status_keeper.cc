@@ -80,7 +80,7 @@ bool ComponentStatusKeeper::Initiate() {
 
 /** Destructs the ComponentStatusKeeper */
 ComponentStatusKeeper::~ComponentStatusKeeper() {
-  VLOG(1) << "Destructing the status keeper";
+  VLOG(1) << "Destructing the status keeper for " << component_name_;
 }
 
 /** Set a startup time offset */

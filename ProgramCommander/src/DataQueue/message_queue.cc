@@ -5,6 +5,7 @@
  */
 
 #include "DataQueue/message_queue.h"
+#include "DataQueue/message_file_writer.h"
 
 /** Google Logging library */
 #include <glog/logging.h>
@@ -250,6 +251,36 @@ bool MessageQueue::ChangeMaxQueueSize(int32_t new_max_queue_size) {
   return false;
 }
 
+/** Save sensor message to file
+ * This assumes that all messages are sensor messages. So tries to first parse into a sensor message.
+ */
+bool MessageQueue::SaveSensorMessagesToFile(const std::string& filename) {
+  // Open a sensor message file writer, go through all messages, parse each one, save to file and close file.
+  VLOG(2) << "Creating a file writer for " << filename;
+  anantak::MessageFileWriter file_writer;
+  if (!file_writer.Open(filename)) {
+    LOG(ERROR) << "Could not open file. Quitting.";
+    return false;
+  }
+  anantak::SensorMsg sensor_msg;
+  int32_t num_msgs_written = 0;
+  for (int i=0; i<n_msgs_; i++) {
+    // Try to parse the message to a protocol buffer message
+    int32_t msg_idx = (oldest_msg_index_ + i)%queue_size_;
+    sensor_msg.Clear();  // Clear the message before a new parse it done.
+    if (sensor_msg.ParseFromString((*data_queue_.at(msg_idx)).message_str)) {
+      file_writer.WriteMessage(sensor_msg);
+      num_msgs_written++;
+    } else {
+      LOG(ERROR) << "Could not parse message as a sensor message. Skipping.";
+    }
+  }
+  LOG(INFO) << "Written " << num_msgs_written << " messages to file " << filename;
+  file_writer.Close();
+  VLOG(2) << "Closed file " << filename;
+  return true;
+}
+  
 /** Calculate Queue performance measures and return a struct */
 std::unique_ptr<MessageQueue::QueuePerformanceType> MessageQueue::GetQueuePerformance() {
   std::unique_ptr<QueuePerformanceType> queue_perf(new QueuePerformanceType());

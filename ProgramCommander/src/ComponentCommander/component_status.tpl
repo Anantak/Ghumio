@@ -9,6 +9,7 @@
   <div class="ButtonsContainer" id="{{component_name}}_buttons">
     <div class="ButtonsColumn">
       <div class="StartButton" id="{{component_name}}_start">START</div>
+      <div class="Button Yellow" id="{{component_name}}_log">Log</div>
       <div class="ExitButton" id="{{component_name}}_exit">EXIT</div>
     </div>
   </div>
@@ -22,6 +23,9 @@
   }
   $("div#{{component_name}}_start").click(function() {
     send_to_server({msg: "COMMAND {{component_name}} start"});
+  });
+  $("div#{{component_name}}_log").click(function() {
+    send_to_server({msg: "COMMAND {{component_name}} log"});
   });
   $("div#{{component_name}}_exit").click(function() {
     send_to_server({msg: "COMMAND {{component_name}} exit"});
