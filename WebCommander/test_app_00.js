@@ -75,7 +75,7 @@ io.on('connection', function (socket) {
   zmq_socket_sub.on('message', function(data) {
     var data_str = data.toString();
     //console.log(zmq_socket_sub.identity + ': received data ' + data_str);
-    console.log('In: ' + data_str);
+    //console.log('In: ' + data_str);
     var json_msg = data_str.substring(16, data_str.length);
     var msg_data = JSON.parse(json_msg);
     //console.log(json_msg);

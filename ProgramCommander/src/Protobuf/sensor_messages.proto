@@ -3,6 +3,8 @@
  * Each sensor has at least a header message with tag = 1
  */
 
+import "state_messages.proto";
+
 package anantak;
 
 /** Common component of each message */
@@ -17,7 +19,8 @@ message HeaderMsg {
 message SensorMsg {
   // Header
   required HeaderMsg header = 1;
-  // Payload
+  
+  // Sensor messages
   optional MachineInterfaceMsg mi_msg = 11;
   optional ImuMsg imu_msg = 12;
   optional AprilTagMessage april_msg = 13;
@@ -25,6 +28,12 @@ message SensorMsg {
   optional MonocularPinholeCalibrationNoDistortionMsg mono_calib_no_distort_msg = 15;
   optional PixyCameraMessage pixy_cam_msg = 16;
   optional RangeMessage range_msg = 17;
+  
+  // State messages
+  optional KinematicStateMessage kinematic_state_msg = 101;
+  optional Pose3dStateMessage pose3d_state_msg = 102;
+  optional CameraIntrinsicsStateMessage camera_intrinsics_state_msg = 103;
+  
 }
 
 /** Data request - reply is a composite message */
@@ -36,6 +45,7 @@ message DataRequestMsg {
   required RequestType type = 1;
   optional int64 begin_timestamp = 10;
   optional int64 end_timestamp = 11;
+  repeated string sensor_names = 12;    // Name of sensors for which data is needed
 }
 
 /** Composite message of multiple serialized messages */
@@ -119,6 +129,7 @@ message PixyCameraMessage {
    required uint32 width = 5;
    required uint32 height = 6;
   }
+  optional int32 camera_num = 101;
   repeated Block blocks = 10;
 }
 

@@ -208,6 +208,17 @@ class CircularQueue {
     return true;
   }
 
+  /** Add element in the queue by copying the provided one. This calls increment before copying */
+  inline bool AddElement(const ElementType& element) {
+    if (!is_initiated_) {
+      LOG(ERROR) << "First initialize the queue, cannot store in queue";
+      return false;
+    }
+    increment();
+    queue_[current_index_] = element;  // copy here, element parameter gets destructed
+    return true;
+  }
+  
   /** Increment the queue counter */
   inline bool increment() {
     if (n_msgs_ == 0) {current_index_=0; oldest_index_=0; n_msgs_=1;}
@@ -257,6 +268,13 @@ class CircularQueue {
     //return is_initiated_ ? queue_.at(q_idx) : empty_element_type_;
     return queue_.at(q_idx);
   }
+  // Const reference to the last element
+  inline const ElementType& Back() const {
+    int32_t msg_idx = n_msgs_-1;
+    int32_t q_idx = (oldest_index_ + msg_idx)%size_;
+    //return is_initiated_ ? queue_.at(q_idx) : empty_element_type_;
+    return queue_.at(q_idx);
+  }
   // Mutable ptr to last element
   inline ElementType* back_ptr() {
     int32_t msg_idx = n_msgs_-1;
@@ -278,6 +296,11 @@ class CircularQueue {
   }  
   // Mutable pointer to the next element - elements already exist. Can be modified by caller.
   inline ElementType* next_mutable_element() {
+    increment();
+    return is_initiated_ ? &queue_.at(current_index_) : NULL;    
+  }
+  // Mutable pointer to the next element - elements already exist. Can be modified by caller.
+  inline ElementType* NextMutableElement() {
     increment();
     return is_initiated_ ? &queue_.at(current_index_) : NULL;    
   }

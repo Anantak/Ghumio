@@ -24,10 +24,11 @@
 /** Anantak includes */
 #include "ComponentCommander/component_status_keeper.h"
 #include "Filter/circular_pointer_queue.h"
-#include "Filter/model_factory.h"
+#include "Filter/circular_queue.h"
 #include "Filter/performance_tracker.h"
 #include "Filter/observation.h"
-#include "Filter/estimates_tracker.h"
+//#include "Filter/model_factory.h"
+//#include "Filter/estimates_tracker.h"
 
 /** Protocol buffers */
 #include "configurations.pb.h"
@@ -46,8 +47,38 @@ class SlidingWindowFilter {
   /** StartLooping - starts the filter. Needs filter to be initialized beforehand */
   bool StartLooping();
   
+  /** RequestNewData - ask all queues for data since last ts to provided one */
+  bool RequestNewData(int64_t end_ts);
+  
+  /** WaitForData - loop till a data reply comes **/
+  bool WaitForData(int64_t wait_till_ts);
+  
+  /** Publish the message */
+  bool PublishMessage(const anantak::MessageType& sensor_msg, const std::string& subject);
+
   /** Accessors */
-  inline bool is_initiated() {return is_initiated_;}    /**< To check if filter started OK */
+  inline bool is_initiated() const {return is_initiated_;}  /**< To check if filter started OK */
+  inline float loop_frequency() const {return loop_frequency_;}
+  inline float max_loop_frequency() const {return max_loop_frequency_;}
+  inline bool exit_loop() const {return exit_loop_;}
+  inline int64_t wall_time() const {return get_wall_time_microsec();}
+  inline void set_max_loop_frequency(float freq) {max_loop_frequency_ = freq;}
+  inline int64_t data_arrival_delay() const {return data_arrival_delay_;}
+  inline const ObservationsVectorStoreMap& GetLatestObservationsMap() const {
+    return observations_tracker_.element();
+  }
+  inline int32_t num_observations_received() const {return num_observations_received_;}
+  inline int64_t max_timestamp_received() const {return max_timestamp_received_;}
+  inline int64_t min_timestamp_received() const {return min_timestamp_received_;}
+  inline const anantak::FilterConfig& filter_config() const {return *config_;}
+  inline const std::string& command_message() const {return *command_str_;}
+  inline bool got_command() const {return got_command_;}
+  
+  typedef std::map<std::string, anantak::FilterConfig::Model> ModelConfig;
+  inline const ModelConfig& ModelsConfiguration() const {return models_config_;}
+  bool GetModelConfiguration(const std::string& model_name, anantak::FilterConfig::Model* config);
+  bool GetLatestDataFromDataQueue(const std::string& queue_name,
+      const int64_t& timeout_interval, const std::string& sensor_name);
   
  private:
   /** Component settings */
@@ -84,6 +115,8 @@ class SlidingWindowFilter {
   
   bool is_initiated_;                             /**< Indicates that filter is initiated */
   std::string exit_command_str_;                  /**< Commands string for exit component */
+  bool got_command_;                              /**< true if a command was received */
+  StringPtrType command_str_;                     /**< Pointer to the command string */
   float loop_frequency_;                          /**< Looping frequency of the main loop */
   bool exit_loop_;                                /**< Indicator to signal exit the main loop */
   float max_loop_frequency_;                      /**< Maximum achievable looping frequency */  
@@ -96,7 +129,7 @@ class SlidingWindowFilter {
   StringPtrType AssembleStatusString();           /**< Assemble Status String */
   
   /** Inlined utility to get wall time in microseconds */
-  inline int64_t get_wall_time_microsec() {
+  inline int64_t get_wall_time_microsec() const {
     struct timeval tv;
     gettimeofday (&tv, NULL);
     return (int64_t) (tv.tv_sec * 1000000 + tv.tv_usec);  
@@ -131,6 +164,7 @@ class SlidingWindowFilter {
    **/
   
   // Operating functions and variables
+  std::unique_ptr<anantak::FilterConfig> config_;  /**< Config file parsed by the */
   bool InitiateFiltering();                   /**< Initiate component objects of the filter */
   anantak::PerformanceTracker performance_tracker_; /**< Performance tracker with timer objects */
   int64_t max_expected_iteration_interval_;   /**< If iteration interval exceeds this, problem */
@@ -139,12 +173,17 @@ class SlidingWindowFilter {
 
   // Fetch observations from DataQueues
   StringVectorType data_queues_;    /**< Holds the names of all data queues */
+  StringVectorType observation_data_queues_;    /**< Holds the names of observations data queues */
   int64_t data_fetch_begin_timestamp_, data_fetch_end_timestamp_;   /**< data fetch timestamps */
+  int64_t data_arrival_delay_;  /**< time it took for data to come since request was made */
   anantak::DataRequestMsg data_interval_request_msg_;   /**< Holds the data requests to be sent */
+  anantak::DataRequestMsg data_latest_request_msg_;   /**< Holds the data requests to be sent */
   anantak::CompositeMsg data_reply_msg_;        /**< Message with data, received from DataQueues */
   uint32_t data_interval_request_msg_size_;
   bool SendDataRequestsToDataQueues();
   bool ProcessDataRepliesFromDataQueues(PubSubMapIteratorType iter, StringPtrType data);
+  bool SendLatestDataRequestToDataQueue(const std::string& queue_name,
+      const std::string& sensor_name);
   
   // Iterations
   anantak::CircularQueue<int64_t> iterations_tracker_;  /**< circular queue for iteration_ids */
@@ -153,19 +192,21 @@ class SlidingWindowFilter {
   float max_observation_frequency_;           /**< Max expected frequency of observations */
   anantak::ObservationTypeMap observation_types_;   /**< Keeps specifics of the observation types */
   anantak::ObservationsVectorStoreMapCirPtrQueue observations_tracker_;  /**< Owns observations */
+  int32_t num_observations_received_;
+  int64_t max_timestamp_received_, min_timestamp_received_;
   
   // Models
-  anantak::ModelFactory model_factory_;
-  typedef std::map<std::string, anantak::FilterConfig::Model> ModelConfig;
   typedef ModelConfig::iterator ModelConfigIterator;
   ModelConfig models_config_; /**< Models configuration */
-  anantak::ModelPtrMap models_tracker_;   /**< Owns models */
+  
+  //anantak::ModelFactory model_factory_;
+  //anantak::ModelPtrMap models_tracker_;   /**< Owns models */
 
   // States
-  anantak::StateCirPtrQueuePtrMap states_tracker_;   /**< Owns states */
+  //anantak::StateCirPtrQueuePtrMap states_tracker_;   /**< Owns states */
   
   // Estimates
-  anantak::EstimatesPtrMapCirPtrQueue estimates_tracker_;  /**< Owns estimates */  
+  //anantak::EstimatesPtrMapCirPtrQueue estimates_tracker_;  /**< Owns estimates */  
   
 };
 

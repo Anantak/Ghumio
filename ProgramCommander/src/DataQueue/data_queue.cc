@@ -207,6 +207,30 @@ bool DataQueue::Initiate() {
   track_performance_ = false;
   InitiatePerformanceTracking(100);      // Setup performance tracking  
   
+  // Do we need to load data at the start?
+  if (config->has_load_data_at_start()) {
+    if (config->load_data_at_start()) {
+      VLOG(1) << "Loading data into the data queues from files at startup";
+      // Iterate through all message queues, load data from given files
+      for (std::map<std::string, std::unique_ptr<anantak::MessageQueue>>::iterator i_map =
+          message_queue_map_.begin(); i_map != message_queue_map_.end(); i_map++)
+      {
+        // Check if a filename is given for the sensor
+        auto i_filename = message_queue_data_file_.find(i_map->first);
+        if (i_filename == message_queue_data_file_.end()) {
+          continue;
+        }
+        const std::string& msgs_filename = i_filename->second;
+        if (!i_map->second->LoadSensorMessagesFromFile(msgs_filename)) {
+          LOG(ERROR) << "Could not load messages from file " << msgs_filename;
+        } else {
+          // Increment the number of sensor messages seen for the sensor
+            n_sensor_msgs_received_[i_map->first] = i_map->second->n_msgs();
+        }
+      }
+    }
+  }
+  
   return true;
 }
 
@@ -383,11 +407,18 @@ bool DataQueue::HandleSensorMeasurement(PubSubMapIterator iter,
   return true;
 }
 
+/** Helper to check if data_request_msg_ has a specific sensor **/
+bool DataQueue::RequestHasSensor(const std::string& name) const {
+  const auto& names = data_request_msg_.sensor_names();
+  bool found = (std::find(names.begin(), names.end(), name) != names.end());
+  return found;
+}
+
 /** Handle data subscriber queries. */
 bool DataQueue::HandleDataRequest(PubSubMapIterator iter, std::unique_ptr<std::string> msg_ptr) {
   int64_t data_fetch_start_time = get_wall_time_microsec();
   //if (track_performance_) {data_fetch_start_time = get_wall_time_microsec();} 
-  // Record reciept in a counter
+  // Record receipt in a counter
   n_datasub_msgs_received_[iter->first]++;
   // Parse the data request message
   if (!data_request_msg_.ParseFromString(*msg_ptr)) {
@@ -399,12 +430,23 @@ bool DataQueue::HandleDataRequest(PubSubMapIterator iter, std::unique_ptr<std::s
   int n_msgs_added = 0;
   // Adding a timestamps of sending data
   data_reply_msg_.set_timestamp(data_fetch_start_time);
+  // Check if specific sensors have been asked for
+  bool request_has_specific_sensors = (data_request_msg_.sensor_names_size() > 0);
   // Deal with the message depending on the kind of request it is
   if (data_request_msg_.type() == anantak::DataRequestMsg::LATEST) {
+    VLOG(2) << "Got a LATEST data request";
     // Copy the latest messages from each message queue into the message container
     for (std::map<std::string, std::unique_ptr<anantak::MessageQueue>>::iterator i_map =
         message_queue_map_.begin(); i_map != message_queue_map_.end(); i_map++) {
-      n_msgs_added += i_map->second->AddLatestMessageToCompositeMessage(&data_reply_msg_);
+      if (request_has_specific_sensors) {
+        if (RequestHasSensor(i_map->first)) {
+          VLOG(2) << "Adding latest message for sensor " << i_map->first;
+          n_msgs_added += i_map->second->AddLatestMessageToCompositeMessage(&data_reply_msg_);          
+          VLOG(2) << "Added latest message for sensor " << i_map->first;
+        }
+      } else {
+        n_msgs_added += i_map->second->AddLatestMessageToCompositeMessage(&data_reply_msg_);
+      }
     }
   } else if (data_request_msg_.type() == anantak::DataRequestMsg::INTERVAL) {
     // Make sure that we have the begin and end timestamps for the interval
@@ -412,8 +454,15 @@ bool DataQueue::HandleDataRequest(PubSubMapIterator iter, std::unique_ptr<std::s
       // Copy the messages in interval from each message queue into the message container
       for (std::map<std::string, std::unique_ptr<anantak::MessageQueue>>::iterator i_map =
           message_queue_map_.begin(); i_map != message_queue_map_.end(); i_map++) {
-        n_msgs_added += i_map->second->AddMessagesToCompositeMessage(&data_reply_msg_,
-            data_request_msg_.begin_timestamp(), data_request_msg_.end_timestamp());
+        if (request_has_specific_sensors) {
+          if (RequestHasSensor(i_map->first)) {
+            n_msgs_added += i_map->second->AddMessagesToCompositeMessage(&data_reply_msg_,
+                data_request_msg_.begin_timestamp(), data_request_msg_.end_timestamp());
+          }
+        } else {
+          n_msgs_added += i_map->second->AddMessagesToCompositeMessage(&data_reply_msg_,
+              data_request_msg_.begin_timestamp(), data_request_msg_.end_timestamp());
+        }
       }
     } // if has begin,end timestamps
     else {

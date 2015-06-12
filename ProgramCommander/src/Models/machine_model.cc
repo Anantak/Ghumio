@@ -325,9 +325,9 @@ class TagCamerasCalibrator {
     
     sliding_window_options(
       10000000,   // longest problem length
-       3000000,   // shortest problem length
-       1000000,   // solving problem interval
-       2000000    // sliding window length
+       3000000,   // shortest problem length - 
+       1000000,   // solving problem interval - sets the frequency of solving the problem
+       2000000    // sliding window length - window of variable states
     ),
     avg_tags_per_image(5),
     apriltag_view_residual_options()

@@ -42,5 +42,5 @@ namespace anantak {
   typedef ObservationsVectorStoreMap::iterator ObservationsVectorStoreMapIterator;
   typedef anantak::CircularPointerQueue<ObservationsVectorStoreMap>
       ObservationsVectorStoreMapCirPtrQueue;
-
+  
 } // namespace anantak

@@ -6,6 +6,7 @@
 
 #include "DataQueue/message_queue.h"
 #include "DataQueue/message_file_writer.h"
+#include "DataQueue/message_file_reader.h"
 
 /** Google Logging library */
 #include <glog/logging.h>
@@ -185,8 +186,10 @@ int MessageQueue::AddMessagesToCompositeMessage(anantak::CompositeMsg* composite
 int MessageQueue::AddLatestMessageToCompositeMessage(anantak::CompositeMsg* composite_msg_ptr) {
   int n = 0;
   // Copy the string in data queue to the message
-  composite_msg_ptr->add_message_data(data_queue_[current_msg_index_]->message_str);    // copy
-  n++;
+  if (n_msgs_ > 0) {
+    composite_msg_ptr->add_message_data(data_queue_[current_msg_index_]->message_str);    // copy
+    n++;
+  }
   return n;
 } 
 
@@ -280,7 +283,55 @@ bool MessageQueue::SaveSensorMessagesToFile(const std::string& filename) {
   VLOG(2) << "Closed file " << filename;
   return true;
 }
-  
+
+/** Load sensor messages from file
+ */
+bool MessageQueue::LoadSensorMessagesFromFile(const std::string& filename) {
+  // Open the file, read messages one-by-one, insert into the queue
+  int32_t num_msgs_read = 0;
+  VLOG(2) << "Creating a file reader for " << filename;
+  anantak::MessageFileReader file_reader;
+  if (!file_reader.Open(filename)) {
+    LOG(ERROR) << "Could not open file " << filename << ". Quit.";
+    return false;
+  }
+  while (file_reader.file_is_open()) {
+    // Read the size of the message
+    uint32_t msg_size;
+    bool read_size = file_reader.ReadNextMessageSize(&msg_size);
+    if (!read_size) {
+      VLOG(2) << "Closing file after " << num_msgs_read << " messages have been read";
+      file_reader.Close();
+      continue;
+    }
+    // Allocate an array of message size
+    std::vector<char> msg_str(msg_size, 0x00);
+    // Get a pointer to the data buffer
+    char* msg_str_ptr = msg_str.data();
+    // Copy the message data into the buffer
+    bool read_data = file_reader.ReadNextMessageRawToBuffer(msg_str_ptr, msg_size);
+    if (!read_data) {
+      VLOG(2) << "Closing file after " << num_msgs_read << " messages have been read";
+      file_reader.Close();
+      continue;
+    }
+    // Create a queue storage data type
+    int64_t current_time = get_wall_time_microsec();
+    std::unique_ptr<anantak::MessageQueue::QueueDataType> msgq_ptr(
+      new anantak::MessageQueue::QueueDataType(current_time, current_time, msg_str_ptr, msg_size)
+    );
+    // Add message to the queue
+    if (!AddMessage(std::move(msgq_ptr))) {
+      LOG(ERROR) << "Could not add message to the queue";
+    }
+    num_msgs_read++;
+  }
+  VLOG(1) << "Read " << num_msgs_read << " messages from file " << filename;
+  VLOG(1) << "Number of messages in queue = " << n_msgs_ << " for queue size = " << queue_size_;
+  return true;
+}
+
+
 /** Calculate Queue performance measures and return a struct */
 std::unique_ptr<MessageQueue::QueuePerformanceType> MessageQueue::GetQueuePerformance() {
   std::unique_ptr<QueuePerformanceType> queue_perf(new QueuePerformanceType());
