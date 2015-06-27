@@ -36,6 +36,7 @@ set(ProtoFiles
   ${PROJECT_SOURCE_DIR}/src/Protobuf/status_messages.proto
   ${PROJECT_SOURCE_DIR}/src/Protobuf/configurations.proto
   ${PROJECT_SOURCE_DIR}/src/Protobuf/sensor_messages.proto
+  ${PROJECT_SOURCE_DIR}/src/Protobuf/state_messages.proto
 )
 PROTOBUF_GENERATE_CPP(ProtoSources ProtoHeaders ${ProtoFiles})
 
@@ -225,16 +226,37 @@ target_link_libraries(test_front_rangers_monitor ${ZMQ_LIBRARIES})
 target_link_libraries(test_front_rangers_monitor ${CTEMPLATE_LIBRARIES})
 target_link_libraries(test_front_rangers_monitor usb)
 
-add_executable(machine_model src/Models/machine_model.cc ${SOURCE_FILES})
-target_link_libraries(machine_model ${GLOG_LIBRARIES})
-target_link_libraries(machine_model ${GFLAGS_LIBRARIES})
-target_link_libraries(machine_model ${PROTOBUF_LIBRARIES})
-target_link_libraries(machine_model ${ZMQ_LIBRARIES})
-target_link_libraries(machine_model ${CTEMPLATE_LIBRARIES})
-target_link_libraries(machine_model ${CERES_LIBRARIES})
-target_link_libraries(machine_model ${BOOST_LIBRARIES})
-target_link_libraries(machine_model opengv)
+#add_executable(machine_model src/Models/machine_model.cc ${SOURCE_FILES})
+#target_link_libraries(machine_model ${GLOG_LIBRARIES})
+#target_link_libraries(machine_model ${GFLAGS_LIBRARIES})
+#target_link_libraries(machine_model ${PROTOBUF_LIBRARIES})
+#target_link_libraries(machine_model ${ZMQ_LIBRARIES})
+#target_link_libraries(machine_model ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(machine_model ${CERES_LIBRARIES})
+#target_link_libraries(machine_model ${BOOST_LIBRARIES})
+#target_link_libraries(machine_model opengv)
 
+add_executable(beacon_model src/Models/beacon_model.cc ${SOURCE_FILES})
+target_link_libraries(beacon_model ${GLOG_LIBRARIES})
+target_link_libraries(beacon_model ${GFLAGS_LIBRARIES})
+target_link_libraries(beacon_model ${PROTOBUF_LIBRARIES})
+target_link_libraries(beacon_model ${ZMQ_LIBRARIES})
+target_link_libraries(beacon_model ${CTEMPLATE_LIBRARIES})
+target_link_libraries(beacon_model ${CERES_LIBRARIES})
+target_link_libraries(beacon_model ${BOOST_LIBRARIES})
+target_link_libraries(beacon_model opengv)
+target_link_libraries(beacon_model ${OpenCV_LIBS})
+
+add_executable(camera_intrinsics_filter src/Models/camera_intrinsics_filter.cc ${SOURCE_FILES})
+target_link_libraries(camera_intrinsics_filter ${GLOG_LIBRARIES})
+target_link_libraries(camera_intrinsics_filter gflags)
+target_link_libraries(camera_intrinsics_filter ${PROTOBUF_LIBRARIES})
+target_link_libraries(camera_intrinsics_filter ${ZMQ_LIBRARIES})
+target_link_libraries(camera_intrinsics_filter ${CTEMPLATE_LIBRARIES})
+target_link_libraries(camera_intrinsics_filter ${CERES_LIBRARIES})
+target_link_libraries(camera_intrinsics_filter ${BOOST_LIBRARIES})
+target_link_libraries(camera_intrinsics_filter opengv)
+target_link_libraries(camera_intrinsics_filter ${OpenCV_LIBS})
 
 # old executables - may no longer compile
 

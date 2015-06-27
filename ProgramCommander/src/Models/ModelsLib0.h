@@ -14,6 +14,7 @@
 #include <fstream>
 #include <algorithm>
 #include <memory>
+#include <functional>
 
 /** Google libraries */
 #include <glog/logging.h>
@@ -696,6 +697,9 @@ class ScalarState : public State {
   double covariance_;
   
 };  // ScalarState
+std::ostream& operator<<(std::ostream& os, const ScalarState& s) {
+  return os << s.state_ << " var:" << s.covariance_; 
+}
 
 /* Vector3d state
  * This is a 3d vector, e.g. used to estimate gravity in world frame
@@ -1399,6 +1403,7 @@ class StaticAprilTagState : public State {
   
 };  // StaticAprilTagState
 
+
 /* Camera calibration matrix state - distortion free
  * No radial or tangential distortion terms are assumed
  */
@@ -1574,6 +1579,14 @@ class CameraIntrinsicsState : public State {
     return camera_matrix;
   }
   
+  const Eigen::Matrix3d K() const {
+    return K_;
+  }
+  
+  const Eigen::Matrix3d K_inv() const {
+    return K_inv_;
+  }
+  
   // Helper function to show results without changing state
   std::string ToString(bool detailed=true) const {
     MapConstVector4dType s(state_);
@@ -1633,37 +1646,34 @@ class CameraIntrinsicsState : public State {
 }; // CameraIntrinsicsState
 
 /* Camera distortion coefficients state
- * Two radial terms only. Assuming the tangential terms are 0.
+ * Three radial terms and two tangential terms, same as default OpenCV model
  */
-class CameraDistortionState2 : public State {
+class CameraDistortionState5 : public State {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   
   // State
-  double state_[2];   /**< k1, k2 */
+  double state_[5];   /**< k1, k2, k3, t1, t2; Why does OpenCV do it as k1 k2 t1 t2 k3*/
   // Error
-  double error_[2];   /**< dk1, dk2 */
+  double error_[5];   /**< dk1, dk2, dk3, dt1, dt2 */
   // Covariance
-  Eigen::Matrix2d covariance_;
+  Eigen::Matrix<double,5,5> covariance_;
   
-};  // CameraDistortionState2
-
-/* Camera distortion coefficients state
- * Two radial terms and two tangential terms
- */
-class CameraDistortionState4 : public State {
- public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  
-  
-  // State
-  double state_[4];   /**< k1, k2, t1, t2 */
-  // Error
-  double error_[4];   /**< dk1, dk2, dt1, dt2 */
-  // Covariance
-  Eigen::Matrix4d covariance_;
   
 };  // CameraDistortionState4
+
+
+/* Camera state
+ * Composition of camera pinhole model, distortion state and extrinsics
+ */
+class CameraState : public State {
+ public:
+  CameraIntrinsicsState   pinhole_;
+  CameraDistortionState5  distortion_;
+  Pose3dState             extrinsics_;
+  
+};  // CameraState
+
 
 /* Update Pose3dState using covariances
  * Do a Kalman update to a Pose3d using another reading of the pose using the covariances */
@@ -8593,6 +8603,231 @@ class AprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
 };  // AprilTagViewResidual
 
 
+
+/* Tag corners on calibration target */
+class CameraIntrinsicsCalibrationTarget {
+ public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  typedef Eigen::Matrix<double,3,4> Matrix3x4Type;
+  typedef Eigen::Matrix<double,2,4> Matrix2x4Type;
+  
+  std::map<std::string, Matrix3x4Type> tag_map_;
+  std::map<std::string, double> tag_size_;
+  int32_t num_tags_;
+  bool is_initialized_;
+  
+  // Get the config file in constructor, generate the tag-map
+  CameraIntrinsicsCalibrationTarget(const std::string& config_file):
+    tag_map_(), tag_size_(), num_tags_(0), is_initialized_(false)
+  {
+    // Open config file, read tag offsets
+    std::string config_file_path = anantak::GetProjectSourceDirectory() + "/" + config_file;
+    std::unique_ptr<anantak::CameraAprilTagCalibrationTargetConfig> config =
+        anantak::ReadProtobufFile<anantak::CameraAprilTagCalibrationTargetConfig>(config_file_path);
+    if (!config) {
+      LOG(ERROR) << "Could not parse the config file. Calibration target was not loaded.";
+    } else {
+      num_tags_ = config->tags_size();
+      VLOG(1) << "Loaded calibration target with name = " << config->name() << " with "
+          << num_tags_ << " tags";
+      // Generate tag map
+      for (int i=0; i<num_tags_; i++) {
+        // Get the location of the tag on target
+        Eigen::Vector3d tag_posn;
+        const anantak::StaticApriltagStateMessage& tagmsg = config->tags(i);
+        tag_posn << tagmsg.pose().state(4), tagmsg.pose().state(5), tagmsg.pose().state(6);
+        // Get the corners of the tag in tag frame
+        Matrix3x4Type corners = anantak::AprilTag3dCorners(tagmsg.tag().size());
+        corners.colwise() += tag_posn;
+        tag_map_[tagmsg.tag().tag_id()] = corners;  // making a copy here, is only done once
+        tag_size_[tagmsg.tag().tag_id()] = tagmsg.tag().size(); // tag size is stored here
+        VLOG(2) << "Target tag " << i << " id: " << tagmsg.tag().tag_id() << " has corners: \n" << corners;
+      }
+      // 
+      is_initialized_ = true;
+    }
+  }
+  
+  int32_t Size() const {return tag_map_.size();}
+  double TagSize(int32_t i) const {
+    if (i>=tag_map_.size()) {
+      LOG(ERROR) << "i>=tag_map_.size() " << i << " " << tag_map_.size();
+      return -1;
+    }
+    auto it = tag_size_.cbegin();
+    std::advance(it, i);
+    return it->second;
+  }
+  
+  bool IsInitialized() const {return is_initialized_;}
+  
+  // Is this tag present on the calibration target?
+  bool TagIsPresent(const std::string& tag_id) const {
+    return (tag_map_.find(tag_id) != tag_map_.end());
+  }
+  
+  // Function to return tag corners given the tag id
+  const Matrix3x4Type* TagCornersPtr(const std::string& tag_id) const {
+    if (!TagIsPresent(tag_id)) {
+      LOG(ERROR) << "Tag " << tag_id << " is not on calibration target.";
+      return nullptr;
+    }
+    return &tag_map_.at(tag_id);
+  }
+  
+  // Make sure that presence of the tag is checked before using this accessor
+  const Matrix3x4Type& TagCorners(const std::string& tag_id) const {
+    return tag_map_.at(tag_id);
+  }
+  
+  Matrix3x4Type TagCorners(const std::string& tag_id, const double& size) {
+    Matrix3x4Type crnrs = tag_map_.at(tag_id);
+    //crnrs += anantak::AprilTag3dCorners(size - tag_size_[tag_id]);
+    return crnrs;
+  }
+  
+  // Create a reading from the tag sightings in a single image
+  //  Uses epnp algorithm to calculate the location of calibration target from tag views
+  bool CalculateTargetPose(
+      const anantak::AprilTagMessage& apriltag_msg,
+      const anantak::CameraIntrinsicsState& camera,
+      anantak::Pose3dState* target_pose_in_camera)
+  const {
+    if (apriltag_msg.tag_id_size() == 0) {
+      LOG(ERROR) << "No tags seen in the message. Skip.";
+      return false;
+    }
+    
+    int32_t num_tags = apriltag_msg.tag_id_size();
+    target_pose_in_camera->information_ = Epsilon*2;
+    
+    // Camera intrinsics
+    const Eigen::Matrix3d& K = camera.K_;
+    const Eigen::Matrix3d& K_inv = camera.K_inv_;
+      
+    // Generate bearing vectors for every tag, add them to opengv
+    for (int i_tag=0; i_tag<num_tags; i_tag++) {
+      // Get the tag id
+      const std::string& tag_id = apriltag_msg.tag_id(i_tag);   // no need to copy
+      
+      // Before doing any more work make sure this tag is on the target
+      if (!TagIsPresent(tag_id)) {
+        VLOG(1) << "Found a tag that is not present on target: " << tag_id;
+        continue;
+      }
+      
+      // Calculate Camera to Tag pose
+      const Matrix3x4Type& Tjpf = tag_map_.at(tag_id);
+      
+      // Tag coordinates in camera
+      Matrix2x4Type image_coords;
+      image_coords <<
+          apriltag_msg.u_1(i_tag), apriltag_msg.u_2(i_tag), apriltag_msg.u_3(i_tag), apriltag_msg.u_4(i_tag),
+          apriltag_msg.v_1(i_tag), apriltag_msg.v_2(i_tag), apriltag_msg.v_3(i_tag), apriltag_msg.v_4(i_tag);
+          
+      Matrix3x4Type corners_2d;
+      corners_2d.block<2,4>(0,0) = image_coords;
+      corners_2d.block<1,4>(2,0) << 1., 1., 1., 1.;
+      corners_2d = K_inv * corners_2d;
+      corners_2d.colwise().normalize();
+      // Report
+      VLOG(3) << "    corners_in_cam " << tag_id << " = \n" << corners_2d;
+      VLOG(3) << "              Tjpf " << tag_id << " = \n" << Tjpf;
+      
+      // Calculate tag pose in camera using P3P
+      opengv::bearingVectors_t bearing_vecs;
+      opengv::points_t points_vec;
+      for (int i=0; i<4; i++) {
+        bearing_vecs.push_back(corners_2d.col(i));
+        points_vec.push_back(Tjpf.col(i));
+      }
+      opengv::absolute_pose::CentralAbsoluteAdapter adapter(bearing_vecs, points_vec);
+      opengv::transformations_t pnp_transformations = opengv::absolute_pose::p3p_kneip(adapter);
+      //VLOG(1) << "tag = " << apriltag_msg.tag_id(i_tag)
+      //    << " n_tfmtns = " << pnp_transformations.size();
+      //VLOG(3) << "corners = " << points_vec[0].transpose() << ", " << points_vec[1].transpose()
+      //    << ", " << points_vec[2].transpose() << ", " << points_vec[3].transpose();
+      Eigen::Vector4d dffs; dffs << 1e+14, 1e+14, 1e+14, 1e+14;
+      Eigen::Matrix<double,3,16> Cpfs; // corner 3d coordinates in camera frame for 4 guesses
+      int pnp_sz = pnp_transformations.size();
+      for (int i=0; i<std::min(4, pnp_sz); i++) {
+        if (pnp_transformations[i].allFinite()) {
+          //VLOG(1) << "transformation " << i << "\n" << pnp_transformations[i];
+          Eigen::Matrix3d pnp_rotn = pnp_transformations[i].block<3,3>(0,0);
+          Eigen::Vector3d pnp_tran = pnp_transformations[i].col(3);
+          // Calculate reprojection error
+          double total_dff = 0.0;
+          for (int j=0; j<4; j++) {
+            // TpC, TrC, Tpf. CpT = -CrT*TpC. Cpf = CpT + CrT*Tpf = CrT*(Tpf-TpC)
+            Eigen::Vector3d c = pnp_rotn.transpose() * (Tjpf.col(j) - pnp_tran);
+            //VLOG(1) << "c = " << c.transpose();
+            Eigen::Vector3d Kc = K*c;
+            if (i<4 && j<4) {
+              // store Kc (=Cpf) in Cpfs matrix
+              Cpfs.block<3,4>(0,4*i).col(j) = Kc;
+            }
+            //VLOG(1) << "Kc = " << Kc.transpose();
+            Eigen::Vector2d Kcn; Kcn << Kc(0)/Kc(2), Kc(1)/Kc(2);
+            Eigen::Vector2d dff = Kcn - image_coords.col(j);
+            //VLOG(1) << "Kcn = " << Kcn.transpose() << " dff = " << dff.squaredNorm();
+            total_dff += dff.squaredNorm();
+          }
+          if (!std::isnan(total_dff)) dffs[i] = total_dff;
+        }
+      } // for all transformations
+      //VLOG(1) << dffs.transpose();
+      Eigen::Vector4d::Index min_idx; dffs.minCoeff(&min_idx);
+      //VLOG(1) << "Min transformation at " << min_idx;
+      double reproj_error = dffs[min_idx];
+      
+      Eigen::Matrix3d TjrCi = pnp_transformations[min_idx].block<3,3>(0,0);
+      Eigen::Vector3d TjpCi = pnp_transformations[min_idx].col(3);
+      //Cpf = Cpfs.block<3,4>(0,4*min_idx);
+      //VLOG(2) << "Tag "<<tag_id<<" Transform = ("<<reproj_error<<")\n"<<TrC<<"\n"<<TpC;
+      
+      Eigen::Quaterniond TjqCi = Eigen::Quaterniond(TjrCi);
+      Eigen::Matrix3d CirTj(TjrCi.transpose());
+      Eigen::Vector3d CipTj = -TjrCi.transpose()*TjpCi;
+      
+      double information = 1./(TjpCi.norm() * std::max(reproj_error, 1.));
+      
+      if (std::isnan(information) || information<Epsilon ||
+          !TjrCi.allFinite() || !TjpCi.allFinite()) {
+        LOG(ERROR) << "information is nan or <0. information = " << information;
+        LOG(ERROR) << "\nTjrCi is not finite. TjrCi = \n" << TjrCi;
+        LOG(ERROR) << "\nTjpCi is not finite. TjpCi = " << TjpCi.transpose();
+        for (int i=0; i<pnp_transformations.size(); i++)
+          LOG(ERROR) << "\npnp_transformations ("<<i<<") = \n" << pnp_transformations[i];
+        LOG(ERROR) << "\ndffs = " << dffs.transpose() << "  min_idx = " << min_idx;
+        continue;
+      }
+      
+      // Assign calculations to a pose 3d
+      anantak::Pose3dState tag_pose;
+      tag_pose.SetZero();
+      tag_pose.LqvG_ = TjqCi.coeffs();
+      tag_pose.GpL_ = CipTj;
+      tag_pose.information_ = information;
+      VLOG(3) << "Calculated tag pose = " << tag_pose;
+      
+      // Add the tag-pose information to target pose
+      if (!UpdatePose3dUsingInformation(&tag_pose, target_pose_in_camera)) {
+        LOG(ERROR) << "Could not add tag pose information to target pose. Skip.";
+        continue;
+      }
+      
+    } // for each tag seen
+    
+    VLOG(2) << "Calculated target pose = " << *target_pose_in_camera;
+    
+    return true;
+  }
+  
+  virtual ~CameraIntrinsicsCalibrationTarget() {}
+  
+};  // CameraIntrinsicsCalibrationTarget
+
+
 /* April Tag View residual - for dynamic tags
  * This constrains Camera pose, tag pose and camera matrix given a tag view
  * All maths here in in Robotics Notebook #4 ppg 91-92
@@ -8614,6 +8849,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
   typedef Eigen::Matrix<double,6,6,Eigen::RowMajor> Matrix6x6RowType;
   typedef Eigen::Matrix<double,8,8,Eigen::RowMajor> Matrix8x8RowType;
   typedef Eigen::Matrix<double,3,4> Matrix3x4Type;
+  typedef Eigen::Matrix<double,2,4> Matrix2x4Type;
   typedef Eigen::Matrix<double,2,4,Eigen::RowMajor> Matrix2x4RowType;
   typedef Eigen::Matrix<double,2,2,Eigen::RowMajor> Matrix2x2RowType;
   typedef Eigen::Matrix<double,2,3,Eigen::RowMajor> Matrix2x3RowType;
@@ -8642,7 +8878,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
   DynamicAprilTagViewResidual::Options options_;
   
   // Observation
-  const anantak::AprilTagReadingType *tag_view_;
+  Matrix2x4Type       image_coordinates_;   /** coordinates of the tag in image */
   
   // States that this residual constrains
   anantak::Pose3dState *poseC_;             /**< Camera pose tag map frame */
@@ -8662,22 +8898,25 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
   // Timestamp representing the residual - usually used to decide if residual should be used
   int64_t timestamp_;
   
+  // Function declaration for getting tag corners
+  std::function<Matrix3x4Type(double)> tag_corner_function_;
+  
   // Default constructor
   DynamicAprilTagViewResidual() :
     options_(),
-    tag_view_(NULL),
-    poseC_(NULL), tagTj_pose_(NULL), tagTj_size_(NULL), camera_(NULL), timestamp_(0) {
+    poseC_(NULL), tagTj_pose_(NULL), tagTj_size_(NULL), camera_(NULL), timestamp_(0),
+    tag_corner_function_(anantak::AprilTag3dCorners) {
     tagview_residual_.setZero();
     dtagview_dposeC_.setZero();
     dtagview_dposeT0toTj_.setZero();
     dtagview_dTj_size_.setZero();
     dtagview_dK_.setZero();
+    image_coordinates_.setZero();
   }
   
   // Default copy constructor
   DynamicAprilTagViewResidual(const DynamicAprilTagViewResidual& r) {
     options_=r.options_;
-    tag_view_ = r.tag_view_;
     poseC_=r.poseC_; tagTj_pose_=r.tagTj_pose_; tagTj_size_=r.tagTj_size_; camera_ = r.camera_; 
     tagview_residual_ = r.tagview_residual_;
     dtagview_dposeC_ = r.dtagview_dposeC_;
@@ -8685,12 +8924,13 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     dtagview_dTj_size_ = r.dtagview_dTj_size_;
     dtagview_dK_ = r.dtagview_dK_;
     timestamp_ = r.timestamp_;
+    tag_corner_function_ = r.tag_corner_function_;
+    image_coordinates_ = r.image_coordinates_;
   }
   
   // Equal to assignment operator
   DynamicAprilTagViewResidual& operator= (const DynamicAprilTagViewResidual& r) {
     options_=r.options_;
-    tag_view_ = r.tag_view_;
     poseC_=r.poseC_; tagTj_pose_=r.tagTj_pose_; tagTj_size_=r.tagTj_size_; camera_ = r.camera_; 
     tagview_residual_ = r.tagview_residual_;
     dtagview_dposeC_ = r.dtagview_dposeC_;
@@ -8698,6 +8938,8 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     dtagview_dTj_size_ = r.dtagview_dTj_size_;
     dtagview_dK_ = r.dtagview_dK_;
     timestamp_ = r.timestamp_;
+    tag_corner_function_ = r.tag_corner_function_;
+    image_coordinates_ = r.image_coordinates_;
   }
   
   // Destructor
@@ -8706,7 +8948,6 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
   // Reset residual
   bool Reset() {
     // options_ are not reset
-    tag_view_ = NULL;
     poseC_ = NULL; tagTj_pose_ = NULL; tagTj_size_ = NULL; camera_ = NULL;
     tagview_residual_.setZero();
     dtagview_dposeC_.setZero();
@@ -8714,6 +8955,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     dtagview_dTj_size_.setZero();
     dtagview_dK_.setZero();
     timestamp_=0;
+    image_coordinates_.setZero();
     return true;
   }
   
@@ -8744,12 +8986,11 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     Reset();
     
     // Assign pointers to states
-    tag_view_ = tag_view;     // Observation of tag corners
+    image_coordinates_ = tag_view->image_coords;
     poseC_ = poseC;           // Camera pose in TagMap state
     tagTj_pose_ = tagTj_pose; // Tag pose in TagMap state
     tagTj_size_ = tagTj_size; // Tag pose in TagMap state
     camera_ = camera;         // Camera intrinsics state
-    //timestamp_ = poseC_->timestamp_;
     timestamp_ = tag_view->Timestamp();  // Set the timestamp from the reading
     
     // Calculate starting Residuals and Jacobians
@@ -8773,6 +9014,76 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     return Create(tag_view, poseC, tagTj_pose, tagTj_size, camera, is_zero_cam);
   }
   
+  // Create residual for i_tag'th tag in apriltag_msg located on the calibration target
+  bool Create(
+      const int64_t& timestamp,
+      const AprilTagMessage& apriltag_msg,
+      const int32_t& i_tag,
+      const CameraIntrinsicsCalibrationTarget& target,
+      anantak::Pose3dState *poseC,
+      anantak::Pose3dState *tagTj_pose,
+      anantak::ScalarState *tagTj_size, 
+      anantak::CameraIntrinsicsState *camera,
+      DynamicAprilTagViewResidual::Options *options,
+      bool is_zero_cam = false)
+  {
+    if (options->sigma_image < Epsilon) {
+      LOG(WARNING) << "Provided image corner sqrt variance is zero.";
+    }
+    options_ = *options;  // copy options as these are kept for life of the residual
+    
+    if (i_tag > apriltag_msg.tag_id_size()-1) {
+      LOG(ERROR) << "i_tag > apriltag_msg.tag_id_size()-1 ! "
+          << i_tag << " " << apriltag_msg.tag_id_size();
+      return false;
+    }
+    
+    const std::string tag_id = apriltag_msg.tag_id(i_tag);
+    if (!target.TagIsPresent(tag_id)) {
+      LOG(ERROR) << "Tag " << tag_id << " was not found on the target";
+      return false;
+    }
+    
+    if (timestamp == 0) {
+      LOG(WARNING) << "Timestamp is zero";
+    }
+    if (poseC->IsZero() && !is_zero_cam) {
+      LOG(WARNING) << "Provided camera pose is zero";
+    }
+    if (tagTj_pose->IsZero()) {
+      LOG(WARNING) << "Provided tagTj pose is zero";
+    }
+    if (tagTj_size->IsZero()) {
+      LOG(WARNING) << "Provided tagTj size is zero " << tagTj_size->Value();
+    }
+    if (camera->IsZero()) {
+      LOG(ERROR) << "Provided camera is zero. Can not continue";
+      return false;
+    }
+    
+    // Reset the residual
+    Reset();
+    
+    // Assign values and pointers
+    image_coordinates_ <<
+        apriltag_msg.u_1(i_tag), apriltag_msg.u_2(i_tag), apriltag_msg.u_3(i_tag), apriltag_msg.u_4(i_tag),
+        apriltag_msg.v_1(i_tag), apriltag_msg.v_2(i_tag), apriltag_msg.v_3(i_tag), apriltag_msg.v_4(i_tag);
+    poseC_ = poseC;           // Camera pose in TagMap state
+    tagTj_pose_ = tagTj_pose; // Tag pose in TagMap state
+    tagTj_size_ = tagTj_size; // Tag pose in TagMap state
+    camera_ = camera;         // Camera intrinsics state
+    timestamp_ = timestamp;   // Set the timestamp
+    
+    // Calculate starting Residuals and Jacobians
+    if (!CalculateStartingResidualandJacobians()) {
+      LOG(ERROR) << "Could not calculate Jacobians. Exit.";
+      return false;
+    }
+    
+    return true;
+  }
+  
+  // Set the timestamp
   bool SetTimestamp(const int64_t& ts) {
     timestamp_ = ts;
     return true;
@@ -8811,7 +9122,8 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     dCiposeTj_dT0poseCi.block<3,3>(3,3) = -CirT0;
     
     Eigen::Matrix3d CirTj(TjqCi.conjugate());
-    Matrix3x4Type Tjpf = anantak::AprilTag3dCorners(tagTj_size_->Value());
+    //Matrix3x4Type Tjpf = anantak::AprilTag3dCorners(tagTj_size_->Value());
+    Matrix3x4Type Tjpf = tag_corner_function_(tagTj_size_->Value());
     
     //VLOG(1) << "Tjpf = \n" << Tjpf;
     
@@ -8852,7 +9164,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
       Eigen::Vector2d uv;
       uv << fx*x_by_z + cx, fy*y_by_z + cy;
       
-      //VLOG(1) << "uv calc, seen corners = \n" << uv.transpose() << " " << tag_view_->image_coords.col(i_crnr).transpose();
+      //VLOG(1) << "uv calc, seen corners = \n" << uv.transpose() << " " << image_coordinates_.col(i_crnr).transpose();
       
       Matrix2x4RowType duv_dK;
       duv_dK << x_by_z, 0., 1., 0.,   0., y_by_z, 0., 1.;
@@ -8881,7 +9193,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
       dtagview_dTj_size_.block<2,1>(2*i_crnr,0) = duv_dCiposnf * dCiposnf_dsizeTj;
       
       // Residual is calculated as estimate - observation as jacobians are kept positive
-      tagview_residual_.block<2,1>(2*i_crnr,0) = uv - tag_view_->image_coords.col(i_crnr);
+      tagview_residual_.block<2,1>(2*i_crnr,0) = uv - image_coordinates_.col(i_crnr);
       
       Eigen::Matrix3d tag_size_cov = tagTj_size_->covariance_ * tagTj_size_->covariance_ * I3;
       tag_size_cov = CirTj * tag_size_cov * CirTj.transpose();
@@ -8908,7 +9220,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     // if anything has Nans/Inf skip this residual
     if (!tagview_residual_.allFinite()) {
       LOG(ERROR) << "tagview_residual_ = " << tagview_residual_.transpose() << "\n"
-          << "Image coords = \n" << tag_view_->image_coords << "\n"
+          << "Image coords = \n" << image_coordinates_ << "\n"
           << "dtagview_cov_diag = " << dtagview_cov_diag.transpose() << "\n"
           << "tag size = " << tagTj_size_->Value() << "\n"
           << "tag size cov = " << tagTj_size_->covariance_;
@@ -8929,7 +9241,7 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
   // Report calculations
   bool Report() {
     VLOG(1) << "tagview_residual_ = " << tagview_residual_.transpose() << "\n"
-        << "Image coords = \n" << tag_view_->image_coords << "\n";
+        << "Image coords = \n" << image_coordinates_ << "\n";
     }
   
   // Check if the residual is ready for optimization
@@ -8999,6 +9311,16 @@ class DynamicAprilTagViewResidual: public ceres::SizedCostFunction<8, 6,6,1,4> {
     return true;
   }  
 };  // DynamicAprilTagViewResidual
+
+/** TargetPointViewResidual
+ * A target lies in front of the machine. A point on the target is seen by a camera on the machine.
+ *  Camera state has camera's pinhole model, distortion parameters and extrinsics
+ *  Target's pose has its pose wrt machine
+ *  Point's pose has its pose wrt target
+ * In the most general case, we solve for 
+class TargetPointViewResidual : public ceres::SizedCostFunction<2, > {
+  
+};  // PointViewResidual
 
 
 // Residual for calculating IMU position wrt camera
@@ -10494,26 +10816,45 @@ class Model {
   /** Destructor - This should never be called - derived class destructor should be called */
   virtual ~Model() {}
   
+  // Iteration interval
+  virtual const int64_t& IterationInterval() = 0;
+  
+  // Run iteration with observations
+  virtual bool RunIteration(
+      const int64_t& iteration_end_ts,
+      const anantak::ObservationsVectorStoreMap& observations_map) {}
+  
+  // Run iteration without any observations
+  virtual bool RunIteration(
+      const int64_t& iteration_end_ts) {}
+  
   // Start a new iteration
-  virtual bool StartIteration(const int64_t& iteration_end_ts) {}
+  //virtual bool StartIteration(const int64_t& iteration_end_ts) {}
   
   // Create new states for an iteration
-  virtual bool CreateIterationStates(const int64_t& iteration_end_ts) {}
+  //virtual bool CreateIterationStates(const int64_t& iteration_end_ts) {}
   
   // Process the observations
-  virtual bool CreateIterationResiduals(const anantak::ObservationsVectorStoreMap& observations_map) {}
+  //virtual bool CreateIterationResiduals(const anantak::ObservationsVectorStoreMap& observations_map) {}
   
   // Run filtering for the iteration
-  virtual bool RunFiltering(const int64_t& iteration_end_ts) = 0;
+  //virtual bool RunFiltering(const int64_t& iteration_end_ts) = 0;
   
-  // Did the results change? Used to determine if a message should be sent
-  virtual bool ResultsChanged() const {}
+  // Are the results ready to be published? e.g. did the results change? 
+  virtual bool AreResultsReady() const {}
   
   // Get results in form of a message
   virtual inline const anantak::MessageType& GetResultsMessage() {}
   
+  // Show results
+  virtual bool Show() {}
+  
+  // Hide results
+  virtual bool Hide() {}
+  
 };
 
+typedef std::function<bool(const anantak::SensorMsg&)> SensorMessageFilterType;
 
 
 } // namespace anantak

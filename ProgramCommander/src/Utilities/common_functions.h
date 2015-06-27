@@ -80,6 +80,7 @@ std::unique_ptr<MsgType> ReadProtobufFile(std::string config_filename) {
 class Looper {
  public:
   Looper(float freq);
+  bool SetInterval(const int64_t& interval, const int64_t& curr_time);
   virtual ~Looper();
   int64_t Sleep();
   inline float max_frequency() {return max_frequency_;}

@@ -42,6 +42,14 @@ Looper::Looper(float freq) {
   max_frequency_ = 0.0;
   VLOG(2) << "Created a looper at " << loop_timeperiod_/1000 << "ms/" << loop_frequency_ << "Hz";
 }
+bool Looper::SetInterval(const int64_t& interval, const int64_t& curr_time) {
+  loop_frequency_ = float(1000000/interval);
+  loop_timeperiod_ = interval; //int64_t(float(1000000)/freq);
+  last_touch_time_ = curr_time;
+  max_frequency_ = 0.0;
+  VLOG(2) << "Setting looper frequency " << loop_timeperiod_/1000 << "ms/" << loop_frequency_ << "Hz";
+  return true;
+}
 Looper::~Looper() {}
 int64_t Looper::Sleep() {
   int64_t current_time = get_wall_time_microsec();

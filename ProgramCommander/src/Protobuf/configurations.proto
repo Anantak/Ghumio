@@ -191,6 +191,12 @@ message BeaconConfig {
   repeated ImuMessage imus = 3;
 }
 
+/** Camera Calibration target config */
+message CameraAprilTagCalibrationTargetConfig {
+  required string name = 1;     // name of the calibrator
+  repeated StaticApriltagStateMessage tags = 2;  // Static locations of tags on target
+}
+
 /** Camera intrinsics initialization configuration
  * Usually used as starting for the intrinsics calibration of a camera */
 message CameraIntrinsicsInitMessage {
@@ -207,9 +213,9 @@ message AprilTagViewResidualOptionsConfig {
   required double sigma_image = 1;      // stdev of the sighting on the image
 }
 
-/** Beacon camera calibrator config
- * Configuration for the filter that run beacon-based camera calibrator */
-message BeaconCameraCalibratorConfig {
+/** Camera calibrator config
+ * Configuration for the filter that run target-based camera calibrator */
+message CameraCalibratorConfig {
   
   // States specifications
   required string name = 1;   // name of the configuration
@@ -222,12 +228,15 @@ message BeaconCameraCalibratorConfig {
   // Camera specifications
   required uint32 camera_num = 20;   // Camera number of the camera being calibrated - for messages
   required uint32 max_camera_frequency = 21;  // Maximum frequency of camera images
-  required CameraIntrinsicsInitMessage camera_init = 22;  // Starting intrinsics
+  required uint32 max_tags_per_image = 22;  // Maximum number of tags in an image
   
-  // Beacon specifications
-  required BeaconConfig beacon = 30;  // Beacon specs with tags, leds and imus
+  // Camera intrinsics
+  required CameraIntrinsicsInitMessage camera_init = 30;  // Starting intrinsics
+  
+  // Target specifications
+  required string calibration_target_config = 40;  // Target specification
   
   // Residuals specifications
-  required AprilTagViewResidualOptionsConfig apriltag_view_resid_options = 40; 
+  required AprilTagViewResidualOptionsConfig apriltag_view_resid_options = 50; 
 }
 

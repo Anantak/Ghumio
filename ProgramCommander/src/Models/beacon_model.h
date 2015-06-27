@@ -592,6 +592,7 @@ class BeaconFilter : public anantak::Model {
     // Add this timestamp to swf filtering iterations helper
     swf_iterations_.AddData(iteration_end_ts);
     
+    return true;
   }
   
   // Create new states for the iteration

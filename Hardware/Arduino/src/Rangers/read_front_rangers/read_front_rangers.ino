@@ -16,14 +16,14 @@
 
 // Sensor addresses
 // Each sonar has a I2C address
-uint8_t num_sonars = 1;
+uint8_t num_sonars = 0;
 uint8_t sonar_id[] = {6, 7, 8, 9};
 uint8_t sonar_address[] = {222, 224, 226, 228};
 uint32_t sonar_delay = 100;    // 100 milliseconds delay for the sonar
 uint32_t sonar_trigger_time = 0;
 
 // Each Lidar is sensed using PWM signal so has two pins. Lidars are also cycled using power pins
-uint8_t num_lidars = 3;
+uint8_t num_lidars = 5;
 uint8_t lidar_id[] = {1, 2, 3, 4, 5};
 uint16_t lidar_trigger_pin[] = {2, 4, 6, 8, 10};
 uint16_t lidar_signal_pin[] = {3, 5, 7, 9, 11};

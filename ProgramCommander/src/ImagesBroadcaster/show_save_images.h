@@ -183,8 +183,10 @@ class ShowSaveImages {
   
   // Use cv2cg library
   bool use_cv2cg_;
-  static const int TAG_FAMILY = 0;    //4
-  static const int TAG_FAMILY_SIZE = 30;  //600
+  //static const int TAG_FAMILY = 0;    //4
+  //static const int TAG_FAMILY_SIZE = 30;  //600
+  static const int TAG_FAMILY = 4;    //4
+  static const int TAG_FAMILY_SIZE = 600;  //600
   std::vector<cv::Ptr<april::tag::TagFamily>> gTagFamilies;
   cv::Ptr<april::tag::TagDetector> gDetector;
   bool DetectTags(cv::Mat &color_image, cv::Mat &gray_image,
