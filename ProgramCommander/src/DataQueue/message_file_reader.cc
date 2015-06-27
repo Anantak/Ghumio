@@ -183,6 +183,52 @@ float MessageFileReader::MessageReadTime() {
   }
 }
 
+/** Utility function to read all sensor messages from a file **/
+bool MessageFileReader::LoadMessagesFromFile(const std::string& filename,
+    std::vector<anantak::SensorMsg>* msgs) {
+  int32_t num_msgs_read = 0;
+  if (!Open(filename)) {
+    LOG(ERROR) << "Could not open file " << filename << ". Quit.";
+    return false;
+  }
+  // Clear the msgs
+  msgs->clear();
+  anantak::SensorMsg sensor_msg;
+  while (file_is_open()) {
+    // Read the size of the message
+    uint32_t msg_size;
+    bool read_size = ReadNextMessageSize(&msg_size);
+    if (!read_size) {
+      VLOG(2) << "Closing file after " << num_msgs_read << " messages have been read";
+      Close();
+      continue;
+    }
+    // Allocate an array of message size
+    std::vector<char> msg_str(msg_size, 0x00);
+    // Get a pointer to the data buffer
+    char* msg_str_ptr = msg_str.data();
+    // Copy the message data into the buffer
+    bool read_data = ReadNextMessageRawToBuffer(msg_str_ptr, msg_size);
+    if (!read_data) {
+      VLOG(2) << "Closing file after " << num_msgs_read << " messages have been read";
+      Close();
+      continue;
+    }
+    // Try to parse the message to a protocol buffer message
+    sensor_msg.Clear();  // Clear the message before a new parse it done.
+    if (sensor_msg.ParseFromArray(msg_str_ptr, msg_size)) {
+      msgs->push_back(sensor_msg);
+      num_msgs_read++;
+    } else {
+      LOG(ERROR) << "Could not parse message as a sensor message. Skipping.";
+      continue;
+    }
+  }
+  VLOG(1) << "Read " << num_msgs_read << " messages from file " << filename;
+  return true;
+}
+
+
 /** Utility to get wall time in microseconds */
 int64_t MessageFileReader::get_wall_time_microsec() {
   struct timeval tv;
