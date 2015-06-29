@@ -231,6 +231,39 @@ class CameraIntrinsicsFilter : public anantak::Model {
       return true;
     }
     
+    bool SaveObservationsToFile(const std::string& filename) {
+      // Use the filemessagewriter to save messages. We will have to construct the SensorMsg.
+      anantak::MessageFileWriter file_writer;
+      if (!file_writer.Open(filename)) {
+        LOG(ERROR) << "Can not write to this file. " << filename;
+        return false;
+      }
+      
+      for (auto it=cells_.begin(); it!=cells_.end(); it++) {
+        if (!it->IsEmpty()) {
+          // Construct a SensorMsg
+          anantak::SensorMsg msg;
+          anantak::HeaderMsg* hdr_msg = msg.mutable_header();
+          anantak::AprilTagMessage* april_msg = msg.mutable_april_msg();
+          // Build header message
+          int64_t tm = 1; // We could do better and use a real timestamp
+          hdr_msg->set_timestamp(tm);
+          hdr_msg->set_type("AprilTags");
+          hdr_msg->set_recieve_timestamp(tm);
+          hdr_msg->set_send_timestamp(tm);
+          // Build Apriltag message
+          *april_msg = it->apriltag_msg_;
+          
+          // Write to file
+          if (!file_writer.WriteMessage(msg)) {
+            LOG(ERROR) << "Could not write message to file";
+          }
+        }
+      }
+      
+      file_writer.Close();
+    } // Save observations
+    
   };  // Grid
   
   // Display for the filter - owns all display/drawing code
@@ -704,14 +737,14 @@ class CameraIntrinsicsFilter : public anantak::Model {
   bool PassAprilTagCameraMessages(const anantak::SensorMsg& msg) const {
     if (!msg.has_april_msg()) {
       // There is no apriltag message
-      //VLOG(2) << "There is no apriltag message";
+      VLOG(2) << "There is no apriltag message";
       return false;
     }
     const int32_t& cam_id = msg.april_msg().camera_num();
     // Check the camera number, this should be in the list for this filter
     auto it = std::find(options_.tag_camera_ids.begin(), options_.tag_camera_ids.end(), cam_id);
     if (it == options_.tag_camera_ids.end()) {
-      //VLOG(2) << "Camera id found is not processed by this filter " << cam_id;
+      VLOG(2) << "Camera id found is not processed by this filter " << cam_id;
       // This camera is not processed by this filter
       return false;
     }
@@ -738,7 +771,7 @@ class CameraIntrinsicsFilter : public anantak::Model {
             LOG(ERROR) << "Message pointer is null. Skipping.";
             continue;
           }
-          // Cast the pointer to Sensor message. This 
+          // Cast the pointer to Sensor message. 
           if (anantak::SensorMsg* sensor_msg_ptr = dynamic_cast<anantak::SensorMsg*>(msg_ptr)) {
             if (filter_function(*sensor_msg_ptr)) {
               sensor_msgs->push_back(*sensor_msg_ptr);
@@ -824,6 +857,7 @@ class CameraIntrinsicsFilter : public anantak::Model {
     }
     
     if (grid_is_full) {
+      grid_.SaveObservationsToFile("/data/camera_calibration_target_observations.pb.data");
       if (!InitiateCalibration()) {
         LOG(ERROR) << "Could not initiate calibration. Start again!?";
         grid_.Reset();
