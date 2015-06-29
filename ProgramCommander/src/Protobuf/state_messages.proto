@@ -6,8 +6,8 @@ package anantak;
 
 /** Kinematic state */
 message KinematicStateMessage {
-  repeated double state = 1;        // 19 vector of the state
-  repeated double covariance = 3;   // 18x18 row major matrix of the error covariance
+  repeated double state = 1;        // 20 vector of the state
+  repeated double covariance = 3;   // 19x19 row major matrix of the error covariance
 }
 
 /** Pose3dState */
