@@ -4,6 +4,8 @@
  *  Gets the name of a message file, loads all message headers and calculates statistics.
  */
 
+#pragma once
+
 /** std includes */
 #include <string>
 #include <vector>

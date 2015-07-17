@@ -1,0 +1,33 @@
+<div class="ComponentPanel" id="FrontRangersMonitor">
+  <div class="MessagesContainer" id="FrontRangersMonitor_messages">
+    <div class="PanelHeader" id="FrontRangersMonitor_header">FrontRangersMonitor</div>
+    <div class="Message" id="FrontRangersMonitor_status">Unknown</div>
+    <div class="Time" id="FrontRangersMonitor_up_time">Unknown</div>
+    <div class="ProcessId" id="FrontRangersMonitor_process_id"></div>
+    <div class="StatusString" id="FrontRangersMonitor_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="FrontRangersMonitor_buttons">
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="FrontRangersMonitor_start">START</div>
+      <div class="Button Yellow" id="FrontRangersMonitor_log">Log</div>
+      <div class="ExitButton" id="FrontRangersMonitor_exit">EXIT</div>
+    </div>
+  </div>
+</div>
+<script>
+  function update_FrontRangersMonitor(data) {
+    $("div#FrontRangersMonitor_status").text(data.status);
+    $("div#FrontRangersMonitor_up_time").text(data.up_time);
+    $("div#FrontRangersMonitor_process_id").text(data.process_id);
+    $("div#FrontRangersMonitor_status_str").text(data.status_str);
+  }
+  $("div#FrontRangersMonitor_start").click(function() {
+    send_to_server({msg: "COMMAND FrontRangersMonitor start"});
+  });
+  $("div#FrontRangersMonitor_log").click(function() {
+    send_to_server({msg: "COMMAND FrontRangersMonitor log"});
+  });
+  $("div#FrontRangersMonitor_exit").click(function() {
+    send_to_server({msg: "COMMAND FrontRangersMonitor exit"});
+  });
+</script>

@@ -39,12 +39,12 @@ MessageFileWriter::~MessageFileWriter() {
 }
 
 /** Open the file */
-bool MessageFileWriter::Open(std::string filename) {
+bool MessageFileWriter::Open(const std::string& filename) {
   filename_ = anantak::GetProjectSourceDirectory() + "/" + filename;
   VLOG(3) << "Opening file " << filename_;
-  if ((file_handle_ = open(filename_.c_str(), O_WRONLY|O_CREAT,
+  if ((file_handle_ = open(filename_.c_str(), O_WRONLY|O_CREAT|O_TRUNC,
                            S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH)) == -1) {
-    LOG(ERROR) << "Could not open file " << strerror(errno);
+    LOG(ERROR) << "Could not open file " << filename_ << " Error: " << strerror(errno);
     return false;
   }
   VLOG(3) << "File opened ";

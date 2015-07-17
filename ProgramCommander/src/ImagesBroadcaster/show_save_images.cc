@@ -23,9 +23,13 @@
 #include <sstream>
 #include <stdio.h>
 #include <fstream>
+#include <algorithm>
 
 
 namespace anantak {
+
+// Static constants
+const std::string ShowSaveImages::APRIL_MESSAGE_TYPE = "AprilTags";
 
 /** Sliding Window Filter constructor */
 ShowSaveImages::ShowSaveImages(std::string programs_setup_filename,
@@ -40,6 +44,11 @@ ShowSaveImages::ShowSaveImages(std::string programs_setup_filename,
 ShowSaveImages::~ShowSaveImages() {
   VLOG(1) << "ShowSaveImages shutdown.";
   VLOG(1) << "ZMQ transport and all pub/subs will destruct automatically.";
+  
+  VLOG(1) << "Destructing AprilTag C library objects";
+  tag36h11_destroy(tag_family_);
+  apriltag_detector_destroy(tag_detector_);
+  image_u8_destroy(image_u8_);
 }
 
 /** Initiator - creates all starting objects */
@@ -331,6 +340,57 @@ bool ShowSaveImages::InitiateShowSaveImages() {
     }
   }
   
+  // Default settings
+  run_beacon_detector_ = false;
+  detect_leds_ = false;
+  detect_tags_ = false;
+  use_cv2cg_ = true;
+  use_aprillab_ = false;
+  apriltag_publisher_ = nullptr;
+  blob_publisher_ = nullptr;
+  apriltag_subject_ = "";
+  blob_subject_ = "";
+  show_images = true;
+    
+  // Does this image processor work as a Beacon Detector?
+  if (config_->has_beacon_detector()) {
+    LOG(INFO) << "Working as a beacon detector.";
+    run_beacon_detector_ = true;
+    
+    const anantak::ImagesProcessorConfig::BeaconDetector& beacon_config = config_->beacon_detector();
+    
+    // Modify the settings to work as a beacon detector
+    detect_tags_ = true;
+    use_cv2cg_ = true; use_aprillab_ = false;  // By default cv2cg library is used
+    
+    // Check if tag publisher is present in the list of publishers
+    if (publishers_map_.find(beacon_config.tag_publisher_name()) == publishers_map_.end()) {
+      LOG(ERROR) << "Could not find publisher for apriltag publisher";
+      return false;
+    }
+    
+    apriltag_publisher_ = publishers_map_[beacon_config.tag_publisher_name()].get();
+    apriltag_subject_ = beacon_config.tag_publisher_subject();
+    
+    if (beacon_config.has_blob_publisher_name()) {
+      if (publishers_map_.find(beacon_config.blob_publisher_name()) == publishers_map_.end()) {
+        LOG(ERROR) << "Could not find publisher for blob publisher";
+        return false;
+      }
+      if (!beacon_config.has_blob_publisher_subject()) {
+        LOG(ERROR) << "Could not find blob publisher subject but publisher name was given";
+        return false;
+      }
+      detect_leds_ = true;
+      blob_publisher_ = publishers_map_[beacon_config.blob_publisher_name()].get();
+      blob_subject_ = beacon_config.blob_publisher_subject();      
+    }
+    
+    // Prepare the AprilTag message
+    //april_tag_message_
+    
+  }  // if this is a beacon detector
+  
   CV_RED = cv::Scalar(0,0,255);
   CV_BLUE = cv::Scalar(255,0,0);
   CV_GREEN = cv::Scalar(0,255,0);
@@ -358,6 +418,19 @@ bool ShowSaveImages::InitiateShowSaveImages() {
     LOG(INFO) << "April TagDetector created.";
   }
   
+  // Initiate AprilTags C library
+  tag_family_ = tag16h5_create(); //tag36h11_create();
+  tag_family_->black_border = 1;
+  tag_detector_ = apriltag_detector_create();
+  apriltag_detector_add_family(tag_detector_, tag_family_);
+  tag_detector_->quad_decimate = 1.0;
+  tag_detector_->quad_sigma = 0.0;
+  tag_detector_->nthreads = 4;
+  tag_detector_->debug = 0;
+  tag_detector_->refine_edges = 1;
+  tag_detector_->refine_decode = 0;
+  tag_detector_->refine_pose = 0;
+  image_u8_  = image_u8_create(config_->image_width(), config_->image_height());
   
   return true;
 }
@@ -383,16 +456,12 @@ bool ShowSaveImages::StartProcessingImages() {
   long msg_processing_threshold = 10; // milli seconds
   bool exit_now = false;
   bool process_images = true;
-  bool show_images = true;
   bool show_images_original  = false;
   int  show_image_location_x = 0;
   int  show_image_location_y = 0;
   bool publish_odometer_readings = false;
   bool show_motion_map = false;
-  int log_level = 0; // 0 = no logging, 1 = some logging, 2 = verbose, 3 = debug;
-  
-  detect_leds_ = false;
-  detect_tags_ = false;
+  log_level = 0; // 0 = no logging, 1 = some logging, 2 = verbose, 3 = debug;
   
   LOG(INFO) << "  Run time  = " << run_time; 
   LOG(INFO) << "  Threshold = " << msg_processing_threshold;
@@ -605,6 +674,26 @@ bool ShowSaveImages::StartProcessingImages() {
                 }
               }
               
+              // Detect April tags
+              if (detect_tags_) {
+                for (int i_cam=0; i_cam<Ghumio_Images_Message_Num_Images; i_cam++) {
+                  if (process_camera_[i_cam]) {
+                    if (i_cam==0) {
+                      DetectTags(captured_image_front_left, image_front_left_gray, msg_sent_time, i_cam);
+                    }
+                    else if (i_cam==1) {
+                      DetectTags(captured_image_front_right, image_front_right_gray, msg_sent_time, i_cam);
+                    }
+                    else if (i_cam==2) {
+                      DetectTags(captured_image_rear_left, image_rear_left_gray, msg_sent_time, i_cam);
+                    }
+                    else if (i_cam==3) {
+                      DetectTags(captured_image_rear_right, image_rear_right_gray, msg_sent_time, i_cam);
+                    }
+                  }
+                }
+              }
+              
               // Detect LEDs
               if (detect_leds_) {
                 for (int i_cam=0; i_cam<Ghumio_Images_Message_Num_Images; i_cam++) {
@@ -620,26 +709,6 @@ bool ShowSaveImages::StartProcessingImages() {
                     }
                     else if (i_cam==3) {
                       DetectLeds(captured_image_rear_right, image_rear_right_gray);
-                    }
-                  }
-                }
-              }
-              
-              // Detect April tags
-              if (detect_tags_) {
-                for (int i_cam=0; i_cam<Ghumio_Images_Message_Num_Images; i_cam++) {
-                  if (process_camera_[i_cam]) {
-                    if (i_cam==0) {
-                      DetectTags(captured_image_front_left, image_front_left_gray);
-                    }
-                    else if (i_cam==1) {
-                      DetectTags(captured_image_front_right, image_front_right_gray);
-                    }
-                    else if (i_cam==2) {
-                      DetectTags(captured_image_rear_left, image_rear_left_gray);
-                    }
-                    else if (i_cam==3) {
-                      DetectTags(captured_image_rear_right, image_rear_right_gray);
                     }
                   }
                 }
@@ -732,7 +801,8 @@ bool ShowSaveImages::StartProcessingImages() {
                 std::string processing_frame_rate_str = std::to_string(processing_frame_rate);
                 processing_frame_rate_str.append(" Hz");
                 if (detect_leds_) processing_frame_rate_str.append(" LEDs");
-                if (detect_tags_) processing_frame_rate_str.append(" Tags");
+                if (detect_tags_ && use_cv2cg_) processing_frame_rate_str.append(" Tags cv2cg");
+                else if (detect_tags_ && use_aprillab_) processing_frame_rate_str.append(" Tags aprillab");
                 if (take_many_snaps) processing_frame_rate_str.append(" Recording");
                   
                 if (false) {
@@ -747,7 +817,7 @@ bool ShowSaveImages::StartProcessingImages() {
                   // add some information on top
                   cv::putText( display_image_gray, processing_frame_rate_str, cv::Point(0,10), CV_FONT_NORMAL, 0.4, cv::Scalar(255,255,255), 1);
                   cv::imshow( winname, display_image_gray );
-                  cv::waitKey(1);                  
+                  cv::waitKey(1);
                 } else {
                   // add resized original images on the display
                   cv::resize(captured_image_front_left,  small_front_left,  small_front_left.size(),  0, 0, CV_INTER_AREA);
@@ -851,7 +921,9 @@ bool ShowSaveImages::StartProcessingImages() {
         strcpy (argument, tag_command_str_.c_str());
         arglength  = strlen(argument);
         if (strncmp(cmnd_msg, argument, arglength)==0) {
-            detect_tags_ = !detect_tags_;
+            if (detect_tags_ && use_cv2cg_) {detect_tags_=true; use_cv2cg_=false; use_aprillab_=true;}
+            else if (detect_tags_ && use_aprillab_) {detect_tags_=false; use_cv2cg_=true; use_aprillab_=false;}
+            else if (!detect_tags_) {detect_tags_=true; use_cv2cg_=true; use_aprillab_=false;}
             done = true;
         }
         memset(argument, 0, sizeof(argument));
@@ -880,15 +952,15 @@ bool ShowSaveImages::StartProcessingImages() {
             cv::moveWindow( winname, show_image_location_x, show_image_location_y); // move window to a new positon
           } else {
             show_images = false;
-            cv::destroyAllWindows(); // destroy the display window
+            cv::destroyWindow(winname); // destroy the display window
             cv::waitKey(10);
-            cv::destroyAllWindows(); // destroy the display window
+            cv::destroyWindow(winname); // destroy the display window
             cv::waitKey(10);
-            cv::destroyAllWindows(); // destroy the display window
+            cv::destroyWindow(winname); // destroy the display window
             cv::waitKey(10);
-            cv::destroyAllWindows(); // destroy the display window
+            cv::destroyWindow(winname); // destroy the display window
             cv::waitKey(10);
-            cv::destroyAllWindows(); // destroy the display window
+            cv::destroyWindow(winname); // destroy the display window
             cv::waitKey(10);                
           }
           std::cout << "    Set show_images = " << show_images << std::endl;
@@ -999,7 +1071,7 @@ bool ShowSaveImages::StartProcessingImages() {
  *  https://github.com/uzh-rpg/rpg_monocular_pose_estimator
  * Some modifications are made to fit our needs. So credit should be given to Karl Schwabe at RPG
  */
-bool ShowSaveImages::DetectLeds(cv::Mat &color_image, cv::Mat &gray_image) {
+bool ShowSaveImages::DetectLeds(cv::Mat &color_image, const cv::Mat &gray_image) {
   
   const int threshold_value = 220;
   const double gaussian_sigma = 1.;
@@ -1009,25 +1081,26 @@ bool ShowSaveImages::DetectLeds(cv::Mat &color_image, cv::Mat &gray_image) {
   const double max_circular_distortion = 0.7;
   
   // Threshold the image
-  //cv::Mat bw_image;
+  cv::Mat bw_image(gray_image);
   //cv::threshold(image, bwImage, threshold_value, 255, cv::THRESH_BINARY);
-  cv::threshold(gray_image.clone(), gray_image, threshold_value, 255, cv::THRESH_TOZERO);
+  cv::threshold(bw_image.clone(), bw_image, threshold_value, 255, cv::THRESH_TOZERO);
   
   // Gaussian blur the image
   //cv::Mat gaussian_image;
   cv::Size ksize; // Gaussian kernel size. If equal to zero, then the kerenl size is computed from the sigma
   ksize.width = 0;
   ksize.height = 0;
-  cv::GaussianBlur(gray_image.clone(), gray_image, ksize, gaussian_sigma, gaussian_sigma, cv::BORDER_DEFAULT);
+  cv::GaussianBlur(bw_image.clone(), bw_image, ksize, gaussian_sigma, gaussian_sigma, cv::BORDER_DEFAULT);
   
   // Find all contours
   std::vector<std::vector<cv::Point> > contours;
-  cv::findContours(gray_image.clone(), contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
+  cv::findContours(bw_image.clone(), contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
 
   unsigned int numPoints = 0; // Counter for the number of detected LEDs
 
   // Vector for containing the detected points that will be undistorted later
   std::vector<cv::Point2f> distorted_points;
+  std::vector<double> areas;
 
   // Identify the blobs in the image
   for (unsigned i = 0; i < contours.size(); i++) {
@@ -1047,18 +1120,36 @@ bool ShowSaveImages::DetectLeds(cv::Mat &color_image, cv::Mat &gray_image) {
         && std::abs(1 - (area / (CV_PI * std::pow(rect.width / 2, 2)))) <= max_circular_distortion
         && std::abs(1 - (area / (CV_PI * std::pow(rect.height / 2, 2)))) <= max_circular_distortion)
     {
+      areas.push_back(area);
       distorted_points.push_back(mc);
       numPoints++;
     }
   }
   //VLOG(1) << "Detected LED points = " << numPoints;
   
-  // Copy the gray image to color image
-  cv::cvtColor(gray_image, color_image, CV_GRAY2RGB);
+  int max_points = 10;
+  double min_area = 0;
   
-  // Draw the detected points on it
-  for (unsigned i = 0; i < numPoints; i++) {
-    cv::circle(color_image, distorted_points[i], 5, CV_RED, 2);
+  if (numPoints>0) {
+    // If more than max_points, calculate the min area
+    if (numPoints > max_points) {
+      // Sort areas
+      std::vector<double> areas_copy = areas;
+      std::sort(areas_copy.begin(), areas_copy.end());
+      min_area = areas_copy[areas_copy.size() - max_points];
+    }
+    
+    // Copy the gray image to color image
+    //cv::cvtColor(bw_image, color_image, CV_GRAY2RGB);
+    
+    // Draw the detected points on color image
+    if (show_images) {
+      for (unsigned i = 0; i < numPoints; i++) {
+        if (areas[i] >= min_area) {
+          cv::circle(color_image, distorted_points[i], 5, CV_RED, 2);
+        }
+      }
+    }
   }
   
   return true;
@@ -1067,37 +1158,182 @@ bool ShowSaveImages::DetectLeds(cv::Mat &color_image, cv::Mat &gray_image) {
 /* Detect Tags
  * This uses cv2cg library from Simba Forrest.
  */
-bool ShowSaveImages::DetectTags(cv::Mat &color_image, cv::Mat &gray_image) {
-  std::vector<april::tag::TagDetection> detections;
-  gDetector->process(gray_image, detections);
-  int num_tags_detected = (int) detections.size();
-  //VLOG(1) << "Num tags detected = " << num_tags_detected;
+bool ShowSaveImages::DetectTags(cv::Mat &color_image, cv::Mat &gray_image,
+    const int64_t& message_sent_time, const int32_t& cam_num) {
   
-  // Draw the detections on the color image
-  for(int i=0; i<num_tags_detected; ++i) {
-    april::tag::TagDetection& dd = detections[i];
-    int tag_id = dd.id;
-    cv::Point2d p0(dd.p[0][0], dd.p[0][1]);
-    cv::Point2d p1(dd.p[1][0], dd.p[1][1]);
-    cv::Point2d p2(dd.p[2][0], dd.p[2][1]);
-    cv::Point2d p3(dd.p[3][0], dd.p[3][1]);
-    cv::line(color_image, p0, p1, CV_YELLOW, 2);
-    cv::line(color_image, p1, p2, CV_YELLOW, 2);
-    cv::line(color_image, p2, p3, CV_YELLOW, 2);
-    cv::line(color_image, p3, p0, CV_YELLOW, 2);
-    cv::line(color_image, p0, p2, CV_YELLOW, 2);
-    cv::line(color_image, p1, p3, CV_YELLOW, 2);
-    cv::circle(color_image, p0, 3, CV_GREEN, 2);
-    cv::circle(color_image, p1, 3, CV_RED, 2);
-    cv::circle(color_image, p2, 3, CV_BLUE, 2);
-    cv::circle(color_image, p3, 3, CV_BLACK, 2);
-    cv::putText(color_image, dd.toString(), cv::Point(dd.cxy[0],dd.cxy[1]),
-        CV_FONT_NORMAL, .5, CV_WHITE, 4);
-    cv::putText(color_image, dd.toString(), cv::Point(dd.cxy[0],dd.cxy[1]),
-        CV_FONT_NORMAL, .5, CV_BLUE, 2);
+  // Detect using cv2cg library
+  if (use_cv2cg_) {
+    std::vector<april::tag::TagDetection> detections;
+    gDetector->process(gray_image, detections);
+    int num_tags_detected = (int) detections.size();
+    if (log_level>0) std::cout << "Num tags detected = " << num_tags_detected << std::endl;
+    
+    unsigned num_seen = 0;
+    for (int i=0; i<num_tags_detected; ++i) {
+      april::tag::TagDetection& dd = detections[i];
+      // Only best detections are chosen
+      if (dd.hammingDistance == 0) {
+        num_seen++;
+        
+        // Draw the detections on the color image
+        if (show_images) {
+          int tag_id = dd.id;
+          cv::Point2d p0(dd.p[0][0], dd.p[0][1]);
+          cv::Point2d p1(dd.p[1][0], dd.p[1][1]);
+          cv::Point2d p2(dd.p[2][0], dd.p[2][1]);
+          cv::Point2d p3(dd.p[3][0], dd.p[3][1]);
+          cv::line(color_image, p0, p1, CV_YELLOW, 2);
+          cv::line(color_image, p1, p2, CV_YELLOW, 2);
+          cv::line(color_image, p2, p3, CV_YELLOW, 2);
+          cv::line(color_image, p3, p0, CV_YELLOW, 2);
+          cv::line(color_image, p0, p2, CV_YELLOW, 2);
+          cv::line(color_image, p1, p3, CV_YELLOW, 2);
+          cv::circle(color_image, p0, 3, CV_GREEN, 2);
+          cv::circle(color_image, p1, 3, CV_RED, 2);
+          cv::circle(color_image, p2, 3, CV_BLUE, 2);
+          cv::circle(color_image, p3, 3, CV_BLACK, 2);
+          cv::putText(color_image, dd.toString(), cv::Point(dd.cxy[0],dd.cxy[1]),
+              CV_FONT_NORMAL, .5, CV_WHITE, 4);
+          cv::putText(color_image, dd.toString(), cv::Point(dd.cxy[0],dd.cxy[1]),
+              CV_FONT_NORMAL, .5, CV_BLUE, 1);
+        } // show_image
+        
+      } // hamming filter
+    }
+    
+    // Build and transmit a message if any tags were seen, otherwise remain silent.
+    if (run_beacon_detector_ && num_seen>0) {
+      BuildAndSendAprilTagMessage(detections, message_sent_time, cam_num);
+    }
+  }
+  
+  // Detect tags using Apriltag C library from Aprillab
+  if (use_aprillab_) {
+    
+    // Extract the image from cv to image_u8
+    CopyGrayCvMatToImageU8(gray_image, image_u8_);
+    
+    // Detect
+    zarray_t *detections = apriltag_detector_detect(tag_detector_, image_u8_);
+    
+    if (show_images) {
+      for (int i = 0; i < zarray_size(detections); i++) {
+        apriltag_detection_t *det;
+        zarray_get(detections, i, &det);
+        
+        // Only best quality tags are taken
+        if (det->hamming == 0) {
+          //printf("detection %3d: id (%2dx%2d)-%-4d, hamming %d, goodness %8.3f, margin %8.3f\n",
+          //    i, det->family->d*det->family->d, det->family->h, det->id, det->hamming, det->goodness, det->decision_margin);
+          
+          // Draw the detections on the color image
+          std::string tag_id(std::to_string(det->id));
+          cv::Point2d p0(det->p[0][0], det->p[0][1]);
+          cv::Point2d p1(det->p[1][0], det->p[1][1]);
+          cv::Point2d p2(det->p[2][0], det->p[2][1]);
+          cv::Point2d p3(det->p[3][0], det->p[3][1]);
+          cv::line(color_image, p0, p1, CV_YELLOW, 2);
+          cv::line(color_image, p1, p2, CV_YELLOW, 2);
+          cv::line(color_image, p2, p3, CV_YELLOW, 2);
+          cv::line(color_image, p3, p0, CV_YELLOW, 2);
+          cv::line(color_image, p0, p2, CV_YELLOW, 2);
+          cv::line(color_image, p1, p3, CV_YELLOW, 2);
+          cv::circle(color_image, p0, 3, CV_GREEN, 2);
+          cv::circle(color_image, p1, 3, CV_RED, 2);
+          cv::circle(color_image, p2, 3, CV_BLUE, 2);
+          cv::circle(color_image, p3, 3, CV_BLACK, 2);
+          cv::putText(color_image, tag_id, cv::Point(det->c[0],det->c[1]),
+              CV_FONT_NORMAL, .5, CV_WHITE, 4);
+          cv::putText(color_image, tag_id, cv::Point(det->c[0],det->c[1]),
+              CV_FONT_NORMAL, .5, CV_BLUE, 1);
+        }
+      }
+    }
+    apriltag_detections_destroy(detections);
   }
   
   return true;
 }
+
+// Copy the gray image data to Imageu8 used by AprilTags C library
+bool ShowSaveImages::CopyGrayCvMatToImageU8(cv::Mat &gray_image, image_u8_t *im) {
+  
+  for (int32_t v = 0; v < im->height; v++) {
+    uchar* image_row_p  = gray_image.ptr(v);
+    for (int32_t u = 0; u < im->width; u++) {
+      im->buf[v*im->stride + u] = (uint8_t) image_row_p[u];
+    }
+  }
+
+  return true;
+}
+
+// Build an AprilTag message and send it on the publisher
+bool ShowSaveImages::BuildAndSendAprilTagMessage(const std::vector<april::tag::TagDetection>& detections,
+    const int64_t& message_sent_time, const int32_t& cam_num) {
+  
+  // No point of doing all the work if publisher is not available
+  if (!apriltag_publisher_) {
+    LOG(ERROR) << "AprilTag publisher is nullptr, can not publish";
+    return false;
+  }
+  
+  // Clear up the storage for the message
+  april_tag_message_.Clear();
+  anantak::HeaderMsg* hdr_msg = april_tag_message_.mutable_header();
+  anantak::AprilTagMessage* april_msg = april_tag_message_.mutable_april_msg();
+  
+  // Build header message
+  hdr_msg->set_timestamp(message_sent_time);
+  hdr_msg->set_type(APRIL_MESSAGE_TYPE);
+  hdr_msg->set_recieve_timestamp(message_sent_time);
+  hdr_msg->set_send_timestamp(message_sent_time);
+  
+  // Build Apriltag message
+  april_msg->set_camera_num(cam_num);
+  int num_tags_detected = (int) detections.size();
+  for (int i=0; i<num_tags_detected; ++i) {
+    const april::tag::TagDetection& dd = detections[i];
+    if (dd.hammingDistance > 0) continue;
+    april_msg->add_tag_id(dd.toString());
+    april_msg->add_u_1(float(dd.p[0][0]));
+    april_msg->add_v_1(float(dd.p[0][1]));
+    april_msg->add_u_2(float(dd.p[1][0]));
+    april_msg->add_v_2(float(dd.p[1][1]));
+    april_msg->add_u_3(float(dd.p[2][0]));
+    april_msg->add_v_3(float(dd.p[2][1]));
+    april_msg->add_u_4(float(dd.p[3][0]));
+    april_msg->add_v_4(float(dd.p[3][1]));
+  }
+  
+  if (log_level>0) std::cout << "Built an Apriltag message with num tags = " << april_msg->tag_id_size()
+      << " cam " << cam_num << " time " << message_sent_time << std::endl;
+  
+  // Transmit the message over ZMQ
+  return SendSensorMessage(april_tag_message_, apriltag_subject_, apriltag_publisher_);
+}
+
+// Send a sensor message over the bus. This could be a library level function
+bool ShowSaveImages::SendSensorMessage(const anantak::SensorMsg& sensor_msg,
+    const std::string& subject, zmq::socket_t* publisher) {
+  // Get message size
+  size_t message_length = sensor_msg.ByteSize();
+  size_t subject_length = subject.length();
+  // Allocate a message of size = address size + message size
+  zmq::message_t zmsg(subject_length + message_length);
+  // Copy address to the message
+  void* zmsg_ptr = zmsg.data();
+  memcpy(zmsg_ptr, subject.data(), subject_length);
+  // Increment pointer to end of subject
+  zmsg_ptr = static_cast<char*>(zmsg_ptr) + subject_length;
+  // Serialize the message to the stream
+  sensor_msg.SerializeToArray(zmsg_ptr, message_length);
+  bool sent_ok = publisher->send(zmsg, ZMQ_DONTWAIT);
+  if (!sent_ok) {
+    LOG(ERROR) << "Message was not sent";
+  }
+  return true;
+}
+
 
 } // namespace anantak

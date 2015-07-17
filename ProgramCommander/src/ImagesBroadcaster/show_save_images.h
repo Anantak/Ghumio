@@ -31,13 +31,20 @@
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
-// Apriltag detection includes
+// Apriltag detection includes for cv2cg library
 #include "OpenCVHelper.h"
 #define TAG_DEBUG_PERFORMANCE 0
 #define TAG_DEBUG_DRAW 0
 #include "apriltag/apriltag.hpp"
 #include "apriltag/TagFamilyFactory.hpp"
 #include "config.hpp"
+
+// Apriltag detection includes for AprilTags C library from April lab
+#include "apriltag.h"
+#include "tag16h5.h"
+#include "tag36h11.h"
+#include "common/image_u8.h"
+#include "common/zarray.h"
 
 namespace anantak {
 
@@ -168,17 +175,45 @@ class ShowSaveImages {
   
   // LED detection code
   bool detect_leds_;
-  bool DetectLeds(cv::Mat &color_image, cv::Mat &gray_image);
+  bool DetectLeds(cv::Mat &color_image, const cv::Mat &gray_image);
   cv::Scalar CV_RED, CV_BLUE, CV_BLACK, CV_WHITE, CV_GREEN, CV_YELLOW;
   
-  // April tag detection code
+  // April tag detection 
   bool detect_tags_;
-  static const int TAG_FAMILY = 4;
-  static const int TAG_FAMILY_SIZE = 600;
+  
+  // Use cv2cg library
+  bool use_cv2cg_;
+  //static const int TAG_FAMILY = 0;    //4
+  //static const int TAG_FAMILY_SIZE = 30;  //600
+  static const int TAG_FAMILY = 4;    //4
+  static const int TAG_FAMILY_SIZE = 600;  //600
   std::vector<cv::Ptr<april::tag::TagFamily>> gTagFamilies;
   cv::Ptr<april::tag::TagDetector> gDetector;
-  bool DetectTags(cv::Mat &color_image, cv::Mat &gray_image);
+  bool DetectTags(cv::Mat &color_image, cv::Mat &gray_image,
+      const int64_t& message_sent_time, const int32_t& cam_num);
   
+  // April tag detection using AprilTag C library from Aprillab
+  bool use_aprillab_;
+  apriltag_family_t *tag_family_;
+  apriltag_detector_t *tag_detector_;
+  image_u8_t *image_u8_;
+  bool CopyGrayCvMatToImageU8(cv::Mat &gray_image, image_u8_t *im);
+  
+  // Beacon detector
+  bool run_beacon_detector_;
+  zmq::socket_t* apriltag_publisher_;
+  std::string apriltag_subject_;
+  zmq::socket_t* blob_publisher_;
+  std::string blob_subject_;
+  static const std::string APRIL_MESSAGE_TYPE;
+  bool BuildAndSendAprilTagMessage(const std::vector<april::tag::TagDetection>& detections,
+      const int64_t& message_sent_time, const int32_t& cam_num);
+  anantak::SensorMsg april_tag_message_;
+  
+  int log_level;
+  bool show_images;
+  bool SendSensorMessage(const anantak::SensorMsg& msg,
+      const std::string& subject, zmq::socket_t* publisher);
 };
 
 } // namespace anantak

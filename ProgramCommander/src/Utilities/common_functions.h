@@ -57,16 +57,21 @@ std::unique_ptr<MsgType> ReadProtobufFile(std::string config_filename) {
   int in_file_descriptor = open(config_filename.c_str(), O_RDONLY);
   if (in_file_descriptor < 0) {
     LOG(ERROR) << " Error opening the file: " << strerror(errno);
-    return false;
+    return nullptr;
   }
   // Parse the file
   google::protobuf::io::FileInputStream file_input_stream(in_file_descriptor);
-  google::protobuf::TextFormat::Parse(&file_input_stream, &(*config));
+  if (!google::protobuf::TextFormat::Parse(&file_input_stream, &(*config))) {
+    LOG(ERROR) << "Could not parse config file";
+    return nullptr;
+  }
   file_input_stream.Close();
-  // convert to string to display
-  std::string in_config_str;
-  google::protobuf::TextFormat::PrintToString(*config, &in_config_str);
-  VLOG(3) << "in_config = \n" << in_config_str;
+  if (VLOG_IS_ON(3)) {
+    // convert to string to display
+    std::string in_config_str;
+    google::protobuf::TextFormat::PrintToString(*config, &in_config_str);
+    VLOG(3) << "in_config = \n" << in_config_str;
+  }
   // Done
   return config;
 }
@@ -75,6 +80,7 @@ std::unique_ptr<MsgType> ReadProtobufFile(std::string config_filename) {
 class Looper {
  public:
   Looper(float freq);
+  bool SetInterval(const int64_t& interval, const int64_t& curr_time);
   virtual ~Looper();
   int64_t Sleep();
   inline float max_frequency() {return max_frequency_;}

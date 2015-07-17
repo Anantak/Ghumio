@@ -42,6 +42,8 @@ class MessageQueue {
     std::string message_str;    /**< Serialized message as a string */
     // Constructors
     QueueDataType():arrival_time(0), message_time(0), message_str("") {}
+    QueueDataType(int64_t arr_tm, int64_t msg_tm, int32_t msg_sz):
+        arrival_time(arr_tm), message_time(msg_tm), message_str(msg_sz, 0x00) {}
     QueueDataType(int64_t arr_tm, int64_t msg_tm, std::string msg_str):
         arrival_time(arr_tm), message_time(msg_tm), message_str(msg_str) {}
     QueueDataType(const QueueDataType& msg) {
@@ -129,6 +131,15 @@ class MessageQueue {
    */
   bool ChangeMaxQueueSize(int32_t new_max_queue_size);
   
+  /** Save messages to a file assuming that these are sensor messages
+   * Creates sensor messages from strings and save them to the given data file.
+   */
+  bool SaveSensorMessagesToFile(const std::string& filename);
+  
+  /** Load sensor messages from file
+   */
+  bool LoadSensorMessagesFromFile(const std::string& filename);
+  
   /** Start/stop tracking performance */
   bool StartTrackingPerformance(int32_t track_length);
   bool StopTrackingPerformance();
@@ -142,6 +153,7 @@ class MessageQueue {
   inline int32_t max_queue_size() {return max_queue_size_;}
   inline float max_queue_size_multiple() {return max_queue_size_multiple_;}
   inline bool track_performance() {return track_performance_;}
+  inline int32_t n_msgs() {return n_msgs_;}
   
  private:
   // Settings

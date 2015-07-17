@@ -34,7 +34,7 @@ body {
 
 .MessagesContainer {
   float: left;
-  width: calc(100% - 105px);
+  width: calc(100% - 160px);
 }
 
 .PanelHeader {
@@ -72,6 +72,11 @@ body {
   float: left;
 }
 
+.SelectionColumn {
+  width: 104px;
+  float: left;  
+}
+
 .StartButton {
   height: 20px;
   width: 50px;
@@ -102,6 +107,19 @@ body {
 .Button {
   height: 20px;
   width: 50px;
+  float: left;
+  clear: none;
+  vertical-align: middle;
+  text-align: center;
+  margin: 1px;
+  font: normal 12px Roboto,arial,sans-serif;
+  word-wrap: break-word;
+  cursor: pointer;
+}
+
+.Selection {
+  height: 20px;
+  width: 100px;
   float: left;
   clear: none;
   vertical-align: middle;

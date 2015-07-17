@@ -175,4 +175,7 @@ class CircularPointerQueue {
   static ElementType empty_element_type_;
 };
 
+template<typename ElementType>
+ElementType CircularPointerQueue<ElementType>::empty_element_type_ = ElementType();
+
 } // namespace anantak

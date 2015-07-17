@@ -9,6 +9,7 @@
   <div class="ButtonsContainer" id="WebCommander_buttons">
     <div class="ButtonsColumn">
       <div class="StartButton" id="WebCommander_start">START</div>
+      <div class="Button Yellow" id="WebCommander_log">Log</div>
       <div class="ExitButton" id="WebCommander_exit">EXIT</div>
     </div>
   </div>
@@ -22,6 +23,9 @@
   }
   $("div#WebCommander_start").click(function() {
     send_to_server({msg: "COMMAND WebCommander start"});
+  });
+  $("div#WebCommander_log").click(function() {
+    send_to_server({msg: "COMMAND WebCommander log"});
   });
   $("div#WebCommander_exit").click(function() {
     send_to_server({msg: "COMMAND WebCommander exit"});

@@ -63,12 +63,11 @@ int main(int argc, char** argv) {
   pixy_init_status = pixy_init_symlink(FLAGS_symlink.c_str());
 
   // Was there an error initializing pixy? //
-  if(!pixy_init_status == 0)
-  {
+  if(!pixy_init_status == 0) {
     // Error initializing Pixy //
     printf("pixy_init(): ");
     pixy_error(pixy_init_status);
-
+    
     return pixy_init_status;
   }
 

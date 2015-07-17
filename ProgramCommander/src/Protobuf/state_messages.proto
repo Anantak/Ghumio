@@ -1,0 +1,61 @@
+/**
+ * Machine messages
+ */
+
+package anantak;
+
+/** Kinematic state */
+message KinematicStateMessage {
+  repeated double state = 1;        // 20 vector of the state
+  repeated double covariance = 3;   // 19x19 row major matrix of the error covariance
+}
+
+/** Pose3dState */
+message Pose3dStateMessage {
+  repeated double state = 1;        // 7 vector of the state
+  repeated double covariance = 3;   // 6x6 row major matrix of the error covariance
+}
+
+/** Position3dState */
+message Vector3dStateMessage {
+  repeated double state = 1;        // 3 vector of the state
+  repeated double covariance = 3;   // 3x3 row major matrix of the error covariance  
+}
+
+/** Camera intrinsics */
+message CameraIntrinsicsStateMessage {
+  required int32 camera_num = 2;
+  repeated double pinhole = 3;      // 4 vector of fx, fy, cx, cy
+  repeated double radial = 4;       // 2 vector of radial distortion coefficients
+  repeated double tangential = 5;   // 2 vector of tangential distortion coefficients
+  repeated double covariance = 6;   // 4x4 / 6x6 / 8x8 Row major matrix of the error covariance
+}
+
+/** Apriltag */
+message ApriltagStateMessage {
+  required string tag_id = 1;
+  required double size = 2;
+  required double covariance = 3;   // covarince of the size
+}
+
+/** Static Apriltag message */
+message StaticApriltagStateMessage {
+  required ApriltagStateMessage tag = 1;
+  required Pose3dStateMessage pose = 2;
+}
+
+/** LEDs message */
+message LedMessage {
+  required Vector3dStateMessage position = 1;
+  required double diameter = 2;
+}
+
+/* IMU message */
+message ImuMessage {
+  required Pose3dStateMessage pose = 1;
+  // accelerometer biases
+  // gyroscope biases
+  // gravity (?)
+  // variances of biases and measurements
+}
+

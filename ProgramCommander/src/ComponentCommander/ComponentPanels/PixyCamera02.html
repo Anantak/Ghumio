@@ -1,0 +1,40 @@
+<div class="ComponentPanel" id="PixyCamera02">
+  <div class="MessagesContainer" id="PixyCamera02_messages">
+    <div class="PanelHeader" id="PixyCamera02_header">PixyCamera02</div>
+    <div class="Message" id="PixyCamera02_status">Unknown</div>
+    <div class="Time" id="PixyCamera02_up_time">Unknown</div>
+    <div class="ProcessId" id="PixyCamera02_process_id"></div>
+    <div class="StatusString" id="PixyCamera02_status_str"></div>
+  </div>
+  <div class="ButtonsContainer" id="PixyCamera02_buttons">
+    <div class="ButtonsColumn">
+      <div class="Button Green" id="PixyCamera02_show">Show</div>
+    </div>
+    <div class="ButtonsColumn">
+      <div class="StartButton" id="PixyCamera02_start">START</div>
+      <div class="Button Yellow" id="PixyCamera02_log">Log</div>
+      <!--<div class="Button Orange" id="PixyCamera02_pause">Pause</div>-->
+      <div class="ExitButton" id="PixyCamera02_exit">EXIT</div>      
+    </div>
+  </div>
+</div>
+<script>
+  function update_PixyCamera02(data) {
+    $("div#PixyCamera02_status").text(data.status);
+    $("div#PixyCamera02_up_time").text(data.up_time);
+    $("div#PixyCamera02_process_id").text(data.process_id);
+    $("div#PixyCamera02_status_str").text(data.status_str);
+  }
+  $("div#PixyCamera02_start").click(function() {
+    send_to_server({msg: "COMMAND PixyCamera02 start"});
+  });
+  $("div#PixyCamera02_exit").click(function() {
+    send_to_server({msg: "COMMAND PixyCamera02 exit"});
+  });
+  $("div#PixyCamera02_log").click(function() {
+    send_to_server({msg: "COMMAND PixyCamera02 log"});
+  });
+  $("div#PixyCamera02_show").click(function() {
+    send_to_server({msg: "COMMAND PixyCamera02 show"});
+  });
+</script>

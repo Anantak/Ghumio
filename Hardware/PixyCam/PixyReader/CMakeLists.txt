@@ -15,7 +15,7 @@ find_package(UDev REQUIRED)
 # use sse3 instruction set
 #SET(CMAKE_CXX_FLAGS "-march=native -msse3 -O3")
 # C++11 std
-add_definitions("-march=native -msse3 -O2 -std=c++0x") 
+add_definitions("-march=native -msse4 -O3 -std=c++0x") 
 # make release version
 set(CMAKE_BUILD_TYPE Release)
 

@@ -9,6 +9,7 @@
   <div class="ButtonsContainer" id="ProgramCommander_buttons">
     <div class="ButtonsColumn">
       <div class="StartButton" id="ProgramCommander_start">START</div>
+      <div class="Button Yellow" id="ProgramCommander_log">Log</div>
       <div class="ExitButton" id="ProgramCommander_exit">EXIT</div>
     </div>
   </div>
@@ -22,6 +23,9 @@
   }
   $("div#ProgramCommander_start").click(function() {
     send_to_server({msg: "COMMAND ProgramCommander start"});
+  });
+  $("div#ProgramCommander_log").click(function() {
+    send_to_server({msg: "COMMAND ProgramCommander log"});
   });
   $("div#ProgramCommander_exit").click(function() {
     send_to_server({msg: "COMMAND ProgramCommander exit"});

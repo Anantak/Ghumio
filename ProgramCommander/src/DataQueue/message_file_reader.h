@@ -5,12 +5,15 @@
  *  File is closed only at the end.
  */
 
+#pragma once
+
 /** std includes */
 #include <string>
 #include <memory>
 
 /** Protobuf includes */
 #include <google/protobuf/message.h>
+#include "sensor_messages.pb.h"
 
 namespace anantak {
   
@@ -55,6 +58,9 @@ class MessageFileReader {
   bool StartTrackingPerformance(int32_t n_acc_write_times = 100);
   bool StopTrackingPerformance();
   float MessageReadTime();           /**< Average time taken to write one message */
+  
+  /** Utility function to read all sensor messages from a file **/
+  bool LoadMessagesFromFile(const std::string& filename, std::vector<anantak::SensorMsg>* msgs);
   
   // Accessors and mutators
   inline bool file_is_open() {return file_is_open_;}    /**< Is the file open? */

@@ -173,6 +173,14 @@ bool SlidingWindowFilter::InitiateComponent() {
     subscribers_to_be_created.push_back(data_queue.name());
     subscriber_type_[data_queue.name()] = kDataQueue;
     data_queues_.push_back(data_queue.name());
+    // Observations data queues
+    if (std::find(config->observations_data_queue_names().begin(),
+                  config->observations_data_queue_names().end(),
+                  data_queue.name()) != config->observations_data_queue_names().end())
+    {
+      VLOG(1) << "Using " << data_queue.name() << " as an observations queue";
+      observation_data_queues_.push_back(data_queue.name());
+    }
   }
   data_queues_.shrink_to_fit(); // release any extra space
   // Find subscriber settings
@@ -242,7 +250,10 @@ bool SlidingWindowFilter::InitiateComponent() {
     models_config_[config->model(i).name()] = config->model(i); // copy
     LOG(INFO) << "Reading configuration for model " << config->model(i).name();
   }
-
+  
+  // Transfer the object to persistent storage pointer
+  config_ = std::move(config);
+  
   return true;
 }
 
@@ -303,53 +314,53 @@ bool SlidingWindowFilter::InitiateFiltering() {
       << observations_tracker_.current_index();
   // Creating a performance tracker for observations keeper
   performance_tracker_.AddTimer("Observations", 100);
-  
+  performance_tracker_.AddTimer("DataDelay", 100);  
   
   /** Initiate Models */
-  for (ModelConfigIterator i=models_config_.begin(); i!=models_config_.end(); i++) {
-    VLOG(1) << "Creating model " << i->first;
-    anantak::ModelPtr model_ptr = model_factory_.CreateModel(
-                                    i->first, i->second.type(), i->second.config_file());
-    if (!model_ptr) {
-      LOG(ERROR) << "Got an empty model. Can not continue.";
-      return false;
-    }
-    VLOG(1) << "Initiating model " << i->first;
-    if (!model_ptr->Initiate(max_sliding_window_interval_, &observations_tracker_, &states_tracker_,
-                        &estimates_tracker_)) {
-      LOG(ERROR) << "Could not initiate model " << i->first << ". Quit.";
-      return false;
-    }
-    models_tracker_[i->first] = std::move(model_ptr);   // moved to the map
-  }
+  //for (ModelConfigIterator i=models_config_.begin(); i!=models_config_.end(); i++) {
+  //  VLOG(1) << "Creating model " << i->first;
+  //  anantak::ModelPtr model_ptr = model_factory_.CreateModel(
+  //                                  i->first, i->second.type(), i->second.config_file());
+  //  if (!model_ptr) {
+  //    LOG(ERROR) << "Got an empty model. Can not continue.";
+  //    return false;
+  //  }
+  //  VLOG(1) << "Initiating model " << i->first;
+  //  if (!model_ptr->Initiate(max_sliding_window_interval_, &observations_tracker_, &states_tracker_,
+  //                      &estimates_tracker_)) {
+  //    LOG(ERROR) << "Could not initiate model " << i->first << ". Quit.";
+  //    return false;
+  //  }
+  //  models_tracker_[i->first] = std::move(model_ptr);   // moved to the map
+  //}
   
   /** Allocate memory for the Models' States */
-  for (ModelPtrMapIterator i=models_tracker_.begin(); i!=models_tracker_.end(); i++) {
-    if (!i->second->AllocateMemoryForStates()) {
-      LOG(ERROR) << "Could not allocated memory for states for model " << i->first << ". Quit";
-      return false;
-    }
-  }
+  //for (ModelPtrMapIterator i=models_tracker_.begin(); i!=models_tracker_.end(); i++) {
+  //  if (!i->second->AllocateMemoryForStates()) {
+  //    LOG(ERROR) << "Could not allocated memory for states for model " << i->first << ". Quit";
+  //    return false;
+  //  }
+  //}
   
   /** Allocate empty maps for the estimates */
-  estimates_tracker_.Initiate(component_name_+".EstimatesTracker", iterations_per_window_interval_);
-  for (int i=0; i<iterations_per_window_interval_; i++) {
-    // Create a new map of estimates and move it to estimates tracker
-    anantak::EstimatesPtrMapPtr map_ptr(new EstimatesPtrMap());
-    if (!estimates_tracker_.add_element(std::move(map_ptr))) {
-      LOG(ERROR) << "Could not move estimates map to estimates tracker";
-      return false;
-    }
-  }
-  estimates_tracker_.increment(); // move pointer back to the beginning of circular array
+  //estimates_tracker_.Initiate(component_name_+".EstimatesTracker", iterations_per_window_interval_);
+  //for (int i=0; i<iterations_per_window_interval_; i++) {
+  //  // Create a new map of estimates and move it to estimates tracker
+  //  anantak::EstimatesPtrMapPtr map_ptr(new EstimatesPtrMap());
+  //  if (!estimates_tracker_.add_element(std::move(map_ptr))) {
+  //    LOG(ERROR) << "Could not move estimates map to estimates tracker";
+  //    return false;
+  //  }
+  //}
+  //estimates_tracker_.increment(); // move pointer back to the beginning of circular array
   
   /** Allocate memory for the Models' Estimates */
-  for (ModelPtrMapIterator i=models_tracker_.begin(); i!=models_tracker_.end(); i++) {
-    if (!i->second->AllocateMemoryForEstimates()) {
-      LOG(ERROR) << "Could not allocated memory for estimates for model " << i->first << ". Quit";
-      return false;
-    }
-  }
+  //for (ModelPtrMapIterator i=models_tracker_.begin(); i!=models_tracker_.end(); i++) {
+  //  if (!i->second->AllocateMemoryForEstimates()) {
+  //    LOG(ERROR) << "Could not allocated memory for estimates for model " << i->first << ". Quit";
+  //    return false;
+  //  }
+  //}
   
   // Data fetching variables
   data_fetch_begin_timestamp_ = get_wall_time_microsec();
@@ -357,6 +368,9 @@ bool SlidingWindowFilter::InitiateFiltering() {
   data_interval_request_msg_.set_type(anantak::DataRequestMsg::INTERVAL);
   data_interval_request_msg_.set_begin_timestamp(data_fetch_begin_timestamp_);
   data_interval_request_msg_.set_end_timestamp(data_fetch_end_timestamp_);
+  data_latest_request_msg_.set_type(anantak::DataRequestMsg::LATEST);
+  data_arrival_delay_ = 0;
+  num_observations_received_ = 0;
 
   return true;
 }
@@ -376,6 +390,7 @@ bool SlidingWindowFilter::StartLooping() {
     
     // Iteration begin
     iterations_tracker_.add_element(data_fetch_end_timestamp_);
+    got_command_ = false;
     
     // Loop through each subscriber, read messages and pass them to status keeper objects
     for (PubSubMapIteratorType i_map = subscriptions_map_.begin();
@@ -432,10 +447,89 @@ bool SlidingWindowFilter::StartLooping() {
   return true;
 }
 
+/** Request new data - ask all queues for data since last ts to provided one */
+bool SlidingWindowFilter::RequestNewData(int64_t end_ts) {
+  // Start timer for data delay
+  performance_tracker_("DataDelay").StartTimer();
+  
+  // Request data from each DataQueue
+  data_fetch_begin_timestamp_ = data_fetch_end_timestamp_;
+  data_fetch_end_timestamp_ = end_ts; //get_wall_time_microsec();
+  SendDataRequestsToDataQueues();
+  
+  // Iteration begin
+  iterations_tracker_.add_element(data_fetch_end_timestamp_);  
+}
+
+/** Loop while waiting for data request reply comes **/
+bool SlidingWindowFilter::WaitForData(int64_t wait_till_ts) {
+  
+  bool data_reply_recieved = false;
+  got_command_ = false;
+  while ((get_wall_time_microsec() < wait_till_ts) && !data_reply_recieved) {
+    
+    // Loop through each subscriber, read messages and pass them to message handler objects
+    for (PubSubMapIteratorType i_map = subscriptions_map_.begin();
+        i_map != subscriptions_map_.end(); i_map++) {
+      VLOG(4) << "Reading subscriber " << i_map->first;
+      
+      // Poll this subscriber without waiting
+      zmq::message_t message;
+      if (i_map->second->recv(&message, ZMQ_DONTWAIT)) {
+        
+        // Create a string by copying the incoming message data. We want to pass the string over
+        //  to message handlers. When the string is passed to a handler, it is responsible for
+        //  destructing it. It will be 'gone' from here. So we use unique_ptr to pass ownership.
+        //  We also want to save on time it takes to copy the string from here to handler object
+        //  as we are no longer copying the string bytes from here to keeper's method. Copying is
+        //  only done once from the message_t buffer to a string object buffer. 
+        size_t msg_size = message.size();
+        const char* msg_data_ptr = static_cast<char*>(message.data());  // cast the void* to char*
+        
+        /** Handle commands */
+        if (subscriber_type_[i_map->first] == kCommand) {
+          std::unique_ptr<std::string> msg_str_ptr(       // copy the entire message
+              new std::string(msg_data_ptr, msg_size));   // copy
+          VLOG(1) << "Command: " << *msg_str_ptr;
+          HandleCommand(std::move(msg_str_ptr));
+        }
+        
+        /** Handle status queries */
+        if (subscriber_type_[i_map->first] == kStatus) {
+          std::unique_ptr<std::string> msg_str_ptr(       // copy the entire message
+              new std::string(msg_data_ptr, msg_size));   // copy
+          VLOG(3) << "Status query: " << *msg_str_ptr;
+          HandleStatusQuery(std::move(msg_str_ptr));
+        }
+        
+        /** Handle data subscriber query */
+        if (subscriber_type_[i_map->first] == kDataQueue) {
+          int address_length = subscriber_subject_length_[i_map->first];
+          std::unique_ptr<std::string> msg_str_ptr(             // copy all but the address
+              new std::string(msg_data_ptr+address_length, msg_size-address_length));  // copy
+          VLOG(4) << "DataReply message: " << *msg_str_ptr;
+          ProcessDataRepliesFromDataQueues(i_map, std::move(msg_str_ptr));
+          data_reply_recieved = true;
+        }
+        
+        // Message_String unique pointer destructs here if it has not been moved
+      } // recv message
+      // Message is destructed here
+    } // for
+    
+  }
+  
+  performance_tracker_("DataDelay").StopTimer();
+  
+  return data_reply_recieved;
+}
+
 /** Handle commands coming from the commander subscriber */
 bool SlidingWindowFilter::HandleCommand(StringPtrType cmd) {
+  got_command_ = true;
   // exit command
   if (*cmd == exit_command_str_) exit_loop_ = true;
+  command_str_ = std::move(cmd);
   return true;
 }
 
@@ -466,6 +560,8 @@ SlidingWindowFilter::StringPtrType SlidingWindowFilter::AssembleStatusString() {
     if (max_loop_frequency_>1000.0f) snprintf(buffer, 100, "%.0f(>1k)", loop_frequency_);
     else snprintf(buffer, 100, "%.0f(%.0f)", loop_frequency_, max_loop_frequency_);
     *status_str += buffer;
+    *status_str += ", reqrep.del "+
+        std::to_string(int64_t(performance_tracker_("DataDelay").average_timer_time()));
   }
   return status_str;
 }
@@ -476,7 +572,7 @@ bool SlidingWindowFilter::SendDataRequestsToDataQueues() {
   data_interval_request_msg_.set_begin_timestamp(data_fetch_begin_timestamp_);
   data_interval_request_msg_.set_end_timestamp(data_fetch_end_timestamp_);
   // Go through each DataQueue, send data requests
-  for (StringVectorIteratorType i=data_queues_.begin(); i!=data_queues_.end(); i++) {
+  for (StringVectorIteratorType i=observation_data_queues_.begin(); i!=observation_data_queues_.end(); i++) {
     VLOG(4) << "Sending data request to " << *i;
     // Build a transport message to be sent to this DataQueue
     std::string address = *i + " ";
@@ -509,6 +605,130 @@ bool SlidingWindowFilter::SendDataRequestsToDataQueues() {
       return false;
     } 
   } // for
+  return true;
+}
+
+/** GetLatestDataFromDataQueue */
+bool SlidingWindowFilter::GetLatestDataFromDataQueue(const std::string& queue_name,
+    const int64_t& timeout_interval, const std::string& sensor_name="") {
+  
+  // Send data request
+  if (!SendLatestDataRequestToDataQueue(queue_name, sensor_name)) {
+    LOG(ERROR) << "Could not send data request";
+    return false;
+  }
+  
+  // Set looping variables
+  int64_t wait_till_ts = get_wall_time_microsec() + timeout_interval;
+  bool data_reply_recieved = false;
+  
+  // Wait for the message
+  while ((get_wall_time_microsec() < wait_till_ts) && !data_reply_recieved) {
+    
+    // Loop through each subscriber, read messages and pass them to message handler objects
+    for (PubSubMapIteratorType i_map = subscriptions_map_.begin();
+        i_map != subscriptions_map_.end(); i_map++) {
+      VLOG(4) << "Reading subscriber " << i_map->first;
+      
+      // Poll this subscriber without waiting
+      zmq::message_t message;
+      if (i_map->second->recv(&message, ZMQ_DONTWAIT)) {
+        
+        // Create a string by copying the incoming message data. We want to pass the string over
+        //  to message handlers. When the string is passed to a handler, it is responsible for
+        //  destructing it. It will be 'gone' from here. So we use unique_ptr to pass ownership.
+        //  We also want to save on time it takes to copy the string from here to handler object
+        //  as we are no longer copying the string bytes from here to keeper's method. Copying is
+        //  only done once from the message_t buffer to a string object buffer. 
+        size_t msg_size = message.size();
+        const char* msg_data_ptr = static_cast<char*>(message.data());  // cast the void* to char*
+        
+        /** Handle commands */
+        if (subscriber_type_[i_map->first] == kCommand) {
+          std::unique_ptr<std::string> msg_str_ptr(       // copy the entire message
+              new std::string(msg_data_ptr, msg_size));   // copy
+          VLOG(1) << "Command: " << *msg_str_ptr;
+          HandleCommand(std::move(msg_str_ptr));
+        }
+        
+        /** Handle status queries */
+        if (subscriber_type_[i_map->first] == kStatus) {
+          std::unique_ptr<std::string> msg_str_ptr(       // copy the entire message
+              new std::string(msg_data_ptr, msg_size));   // copy
+          VLOG(3) << "Status query: " << *msg_str_ptr;
+          HandleStatusQuery(std::move(msg_str_ptr));
+        }
+        
+        /** Handle data subscriber query */
+        if (subscriber_type_[i_map->first] == kDataQueue) {
+          int address_length = subscriber_subject_length_[i_map->first];
+          std::unique_ptr<std::string> msg_str_ptr(             // copy all but the address
+              new std::string(msg_data_ptr+address_length, msg_size-address_length));  // copy
+          VLOG(4) << "DataReply message: " << *msg_str_ptr;
+          ProcessDataRepliesFromDataQueues(i_map, std::move(msg_str_ptr));
+          // Make sure that data is received from the data queue we asked data for
+          if (i_map->first == queue_name) {
+            data_reply_recieved = true;            
+          }
+        }
+        
+        // Message_String unique pointer destructs here if it has not been moved
+      } // recv message
+      // Message is destructed here
+    } // for
+    
+  }  // while
+  
+  return data_reply_recieved;
+}
+
+
+/** SendLatestDataRequestToDataQueue */
+bool SlidingWindowFilter::SendLatestDataRequestToDataQueue(const std::string& queue_name,
+    const std::string& sensor_name="") {
+  data_latest_request_msg_.set_type(anantak::DataRequestMsg::LATEST);
+  data_latest_request_msg_.clear_sensor_names();
+  if (sensor_name != "") {
+    data_latest_request_msg_.add_sensor_names(sensor_name);
+  }
+  // Find the queue
+  auto i_qname = std::find(data_queues_.begin(), data_queues_.end(), queue_name);
+  if (i_qname == data_queues_.end()) {
+    LOG(ERROR) << "Could not find the queue " << queue_name << ". Skip.";
+    return false;
+  }
+  // Send data request
+    VLOG(4) << "Sending data request to " << queue_name;
+    // Build a transport message to be sent to this DataQueue
+    std::string address = queue_name + " ";
+    uint32_t address_size = address.size();
+    uint32_t msg_size = data_latest_request_msg_.ByteSize();
+    // Allocate a transport message of size = address size + message size
+    uint32_t data_latest_request_msg_size = address_size + msg_size;
+    zmq::message_t transport_msg(data_latest_request_msg_size);
+    // Copy address to the message
+    memcpy(transport_msg.data(), address.data(), address.size());
+    // Move to the end of the address
+    void* transport_msg_ptr = transport_msg.data();
+    transport_msg_ptr = static_cast<char*>(transport_msg_ptr) + address_size;
+    // Copy data to the buffer using zero copy stream
+    google::protobuf::io::ArrayOutputStream raw_out_stream(transport_msg_ptr, msg_size);
+    // Creating a coded stream is supposedly quite fast
+    google::protobuf::io::CodedOutputStream coded_out_stream(&raw_out_stream);
+    uint8_t* buffer = coded_out_stream.GetDirectBufferForNBytesAndAdvance(msg_size);
+    if (buffer != NULL) {
+      // The message should fit in one buffer, so use the direct-to-array serialization.
+      data_latest_request_msg_.SerializeWithCachedSizesToArray(buffer);    // copy
+    } else {
+      LOG(ERROR) << "Allocated zmq message does not have required length to fit message";
+      return false;
+    }
+    // Send the message
+    bool sent_ok = publishers_map_[publisher_name_]->send(transport_msg, ZMQ_DONTWAIT);
+    if (!sent_ok) {
+      LOG(ERROR) << "Data reply message was not sent due to a transport problem";
+      return false;
+    } 
   return true;
 }
 
@@ -546,6 +766,9 @@ bool SlidingWindowFilter::ProcessDataRepliesFromDataQueues(
     return false;
   }
   int n_msgs = data_reply_msg_.message_data_size();
+  num_observations_received_ = n_msgs;
+  max_timestamp_received_ = 0;
+  min_timestamp_received_ = INT64_MAX;
   VLOG(1) << "Got a data reply from " << iter->first << " with " << n_msgs << " messages";
   // Save the observations
   observations_tracker_.increment(); // Move to next place holder in observations queue
@@ -565,6 +788,9 @@ bool SlidingWindowFilter::ProcessDataRepliesFromDataQueues(
       continue;
     }
     const std::string& sensor_msg_type = header_msg.type();  // No copying, getting by reference
+    const int64_t& hdr_ts = header_msg.timestamp();
+    if (max_timestamp_received_ < hdr_ts) max_timestamp_received_ = hdr_ts;
+    if (min_timestamp_received_ > hdr_ts) min_timestamp_received_ = hdr_ts;
     ObservationsVectorStoreMapIterator i_map = map_ptr->find(sensor_msg_type);
     if (i_map != map_ptr->end()) {  // Make sure this observation type is processed by this filter
       // Make sure that we have space to store this message in the observations storage
@@ -599,6 +825,39 @@ bool SlidingWindowFilter::ProcessDataRepliesFromDataQueues(
   VLOG(2) << "  Call rate = " << performance_tracker_("Observations").call_rate();
   return true;
   // data gets destructed here
+}
+
+/** Send a sensor message over the bus. This could be a library level function */
+bool SlidingWindowFilter::PublishMessage(const anantak::MessageType& sensor_msg,
+    const std::string& subject) {
+  // Get message size
+  size_t message_length = sensor_msg.ByteSize();
+  size_t subject_length = subject.length();
+  // Allocate a message of size = address size + message size
+  zmq::message_t zmsg(subject_length + message_length);
+  // Copy address to the message
+  void* zmsg_ptr = zmsg.data();
+  memcpy(zmsg_ptr, subject.data(), subject_length);
+  // Increment pointer to end of subject
+  zmsg_ptr = static_cast<char*>(zmsg_ptr) + subject_length;
+  // Serialize the message to the stream
+  sensor_msg.SerializeToArray(zmsg_ptr, message_length);
+  bool sent_ok = publishers_map_.at(publisher_name_)->send(zmsg, ZMQ_DONTWAIT);
+  if (!sent_ok) {
+    LOG(ERROR) << "Message was not sent";
+  }
+  return true;
+}
+
+bool SlidingWindowFilter::GetModelConfiguration(const std::string& model_name,
+    anantak::FilterConfig::Model* config) {
+  auto i_mcfg = models_config_.find(model_name);
+  if (i_mcfg == models_config_.end()) {
+    LOG(ERROR) << "Could not find " << model_name << " in filter configurations";
+    return false;
+  }
+  *config = i_mcfg->second;
+  return true;
 }
 
 } // namespace anantak

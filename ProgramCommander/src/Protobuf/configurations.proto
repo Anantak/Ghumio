@@ -1,3 +1,9 @@
+/**
+ * Configurations declarations
+ */
+
+import "state_messages.proto";
+
 package anantak;
 
 // DataQueue configuration
@@ -7,12 +13,14 @@ message DataQueueConfig {
   optional string publisher_name = 10;    // name of the publisher
   optional string commander_name = 20;    // name of the commander subscription
   optional string status_name = 21;       // name of the status query subscription
+  optional bool load_data_at_start = 22;  // if true, loads sensor data from files at start
   
   message Sensor {
     required string name = 1;
     optional int32 queue_length = 2;
     optional bool track = 3;
     optional int32 track_length = 4;
+    optional string data_file = 5;
   }
   message DataSubscriber {
     required string name = 1;
@@ -54,10 +62,13 @@ message FilterConfig {
   optional string commander_name = 20;    // name of the commander subscription
   optional string status_name = 21;       // name of the status query subscription
   
-  message DataQueue {                   // Sources of observations
-    required string name = 1;             // Name of the data queue - should match name in Settings
+  message DataQueue {                   // Sources of observations and calibrations
+    required string name = 1;           // Name of the data queue - should match name in Settings
   }
   repeated DataQueue data_queue = 30;     // Filter can have multiple data queues
+  
+  // Data queues to be polled for observations in every iteration
+  repeated string observations_data_queue_names = 31;
   
   message ObservationType {             // Observation types that the filter expects to see
     required string name = 1;             // HeaderMsg.Type strings in sensor msgs
@@ -66,13 +77,24 @@ message FilterConfig {
   }
   repeated ObservationType observation_type = 40; // Filter acts on many types of observations
   
-  message Model {                       // Models prepare states and constraints from observations
-    required string name = 1;
+  /** Models prepare the states and residuals from observations; then solve the problem */
+  message Model {
+    required string name = 1;           // Name of the model. Used to match with commands
     required string type = 2;
-    required string config_file = 3;
-    optional string results_subject = 10;  /** If given, this model's results message will be
-                                           *  transmitted on the subject. This usually is the name
-                                           *  of the component receiving the messages */
+    required string config_file = 3;    // Config file for the model, passed to the model at start
+    optional string short_name = 4;     // Short name given to the model
+    
+    /* Model's results message will be transmitted on the subject. This usually is the name
+     * of the component receiving the messages */
+    required string results_subject = 10;   // subject at which the results will be published
+    required int32 results_frequency = 11;  // frequency at which results will be published
+    
+    /* At the start of model, filter will ask for latest message from a queue. Usually this is used
+     * for calibration data. Data will come into observations of the filter. Below we specify
+     * the queue name and the sensor that will be polled for the starting data. If these are not
+     * declared, starting calibrations will not be polled. */
+    optional string results_queue = 12;
+    optional string results_sensor = 13;
   }
   repeated Model model = 50;              // There are many models in a filter
   
@@ -118,4 +140,103 @@ message ImagesProcessorConfig {
     required int32 num = 2;
   }
   repeated CameraToProcess camera = 40;      // Cameras to get data from
+  
+  message BeaconDetector {
+    required string tag_publisher_name = 1;
+    required string tag_publisher_subject = 2;
+    optional int32 num_tags = 3;
+    optional string blob_publisher_name = 4;
+    optional string blob_publisher_subject = 5;
+    optional int32 num_blobs = 6;
+  }
+  optional BeaconDetector beacon_detector = 45;
 }
+
+message PixyCameraConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  optional string symlink = 30;                 // symlink of the pixy camera
+  optional int32 image_width = 32;              // image width e.g. 320 for pixy
+  optional int32 image_height = 33;             // image height e.g. 200 for pixy
+  optional int32 image_depth = 34;              // 3 for color and 1 for monochrome
+  optional int32 image_size = 35;               // number of bytes in image = width*height*depth = 921600 for VGA colored  
+}
+
+message SerialMonitorConfig {
+  optional string name = 1;               // name of this configuration
+  optional float cycle_frequency = 2;     // cycling frequency of the main loop
+  optional string publisher_name = 10;    // name of the publisher
+  optional string commander_name = 20;    // name of the commander subscription
+  optional string status_name = 21;       // name of the status query subscription
+  
+  optional string symlink = 30;           // symlink of the serial connection
+}
+
+/** Sliding Window Options configuration */
+message SlidingWindowOptionsConfig {
+  required uint64 longest_problem_interval = 1;     // longest problem length
+  required uint64 shortest_problem_interval = 2;    // shortest problem length
+  required uint64 sliding_window_interval = 3;      // sliding window length
+  required uint64 solving_problem_interval = 4;     // solving problem interval
+}
+
+/** Beacon configuration */
+message BeaconConfig {
+  repeated StaticApriltagStateMessage tags = 1;
+  repeated LedMessage leds = 2;
+  repeated ImuMessage imus = 3;
+}
+
+/** Camera Calibration target config */
+message CameraAprilTagCalibrationTargetConfig {
+  required string name = 1;     // name of the calibrator
+  repeated StaticApriltagStateMessage tags = 2;  // Static locations of tags on target
+}
+
+/** Camera intrinsics initialization configuration
+ * Usually used as starting for the intrinsics calibration of a camera */
+message CameraIntrinsicsInitMessage {
+  required double angle_of_view = 1;      // in radians
+  repeated double image_size = 2;
+  // Distortions?
+  required double angle_of_view_stdev = 21;   // in radians
+  required double center_stdev = 22;
+}
+
+/** April tag view residual options config
+ * Used by Static and DynamicAprilTagViewResidual to build options */
+message AprilTagViewResidualOptionsConfig {
+  required double sigma_image = 1;      // stdev of the sighting on the image
+}
+
+/** Camera calibrator config
+ * Configuration for the filter that run target-based camera calibrator */
+message CameraCalibratorConfig {
+  
+  // States specifications
+  required string name = 1;   // name of the configuration
+  required uint64 states_history_interval = 2; // How long a history of states to keep (musec)
+  required uint64 states_frequency = 3;        // Frequency of creation of states liked to wall time
+  
+  // Sliding window specifications
+  required SlidingWindowOptionsConfig sliding_window = 10;    // Sliding window specs
+  
+  // Camera specifications
+  required uint32 camera_num = 20;   // Camera number of the camera being calibrated - for messages
+  required uint32 max_camera_frequency = 21;  // Maximum frequency of camera images
+  required uint32 max_tags_per_image = 22;  // Maximum number of tags in an image
+  
+  // Camera intrinsics
+  required CameraIntrinsicsInitMessage camera_init = 30;  // Starting intrinsics
+  
+  // Target specifications
+  required string calibration_target_config = 40;  // Target specification
+  
+  // Residuals specifications
+  required AprilTagViewResidualOptionsConfig apriltag_view_resid_options = 50; 
+}
+
