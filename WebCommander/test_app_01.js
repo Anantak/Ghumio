@@ -2,6 +2,8 @@ var express = require('express');
 var app = express();
 var server = require('http').Server(app);
 var io = require('socket.io')(server);
+var protobuf = require('protobufjs')
+var bytebuffer = require('bytebuffer');
 
 // ZMQ transport, subscribers and publishers
 var zmq = require('zmq');
@@ -66,6 +68,9 @@ app.get('/', function (req, res) {
   res.send(page_rendering)
 });
 
+var sensor_msg_builder = protobuf.loadProtoFile(
+    __dirname + "/../ProgramCommander/src/Protobuf/sensor_messages.proto");
+
 io.on('connection', function (socket) {
   console.log('Incoming connection');
 
@@ -92,6 +97,17 @@ io.on('connection', function (socket) {
     //console.log(json_msg);
     socket.emit('fromServer', msg_data);
   });
+
+  // AprilTag messages from Cam1April sensor
+  zmq_socket_Cam1April.on('message', function(data) {
+    var current_time = new Date().getTime();
+    current_time *= 1000;
+    console.log('Cam1April msg at ' + current_time + ' len = ' + data.length);
+
+    var SensorMsg = sensor_msg_builder.build("anantak.SensorMsg");
+    var msg = SensorMsg.decode(data.slice(10));
+    socket.emit('apriltag', JSON.stringify(msg));
+  });
 });
 
 // StatusQuery messages from ProgramCommander
@@ -115,13 +131,6 @@ zmq_socket_status.on('message', function(data) {
 // query_reply_delay: 100443
 // up_time: 31195029
 
-//////// Sensor data subscribers - Temporary design before we build a better one //////////
-// AprilTag messages from Cam1April sensor
-zmq_socket_Cam1April.on('message', function(data) {
-  var current_time = new Date().getTime();
-  current_time *= 1000;
-  console.log('Cam1April msg at ' + current_time + ' len = ' + data.length);
-});
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 // Example code
