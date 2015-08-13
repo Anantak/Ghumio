@@ -44,7 +44,7 @@ bool MessageFileReader::Open(std::string filename, bool absolute) {
   else filename_ = filename;
   VLOG(3) << "Opening file " << filename_;
   if ((file_handle_ = open(filename_.c_str(), O_RDONLY)) == -1) {
-    LOG(ERROR) << "Could not open file " << strerror(errno);
+    LOG(ERROR) << "Could not open file. Error = " << strerror(errno);
     return false;
   }
   VLOG(3) << "File opened ";
@@ -56,6 +56,10 @@ bool MessageFileReader::Open(std::string filename, bool absolute) {
 
 /** Close the file */
 bool MessageFileReader::Close() {
+  if (!file_is_open_) {
+    LOG(WARNING) << "File is already closed";
+    return false;
+  }
   delete in_stream_;
   VLOG(3) << "Destructed the input stream";
   close(file_handle_);
@@ -185,9 +189,9 @@ float MessageFileReader::MessageReadTime() {
 
 /** Utility function to read all sensor messages from a file **/
 bool MessageFileReader::LoadMessagesFromFile(const std::string& filename,
-    std::vector<anantak::SensorMsg>* msgs) {
+    std::vector<anantak::SensorMsg>* msgs, bool absolute) {
   int32_t num_msgs_read = 0;
-  if (!Open(filename)) {
+  if (!Open(filename, absolute)) {
     LOG(ERROR) << "Could not open file " << filename << ". Quit.";
     return false;
   }

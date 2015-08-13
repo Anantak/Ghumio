@@ -7,9 +7,10 @@
 #include <iomanip>
 
 // Anantak includes
-#include "ModelsLib0.h"
 #include "Filter/timed_circular_queue.h"
 #include "Filter/observation.h"
+#include "Models/model.h"
+#include "ModelsLib1.h"
 
 // OpenCV includes
 #include <opencv2/core/core.hpp>
@@ -52,8 +53,8 @@ class CameraIntrinsicsFilter : public anantak::Model {
     std::string calibration_target_config_file;
     
     // Camera intrinsics specifications
-    bool camera_intrinsics_message_is_available;
-    anantak::CameraIntrinsicsStateMessage camera_intrinsics_message;
+    bool camera_intrinsics_message_is_available;        // camera_intrinsics_message_is_available
+    anantak::SensorMsg camera_state_message;            // camera_intrinsics_message
     anantak::CameraIntrinsicsInitMessage camera_intrinsics_init;
     double camera_angle_of_view;
     std::array<double,2> camera_image_size;
@@ -61,7 +62,7 @@ class CameraIntrinsicsFilter : public anantak::Model {
     double camera_center_stdev;
     
     // Tag view residuals
-    anantak::DynamicAprilTagViewResidual::Options apriltag_view_residual_options;    
+    //anantak::DynamicAprilTagViewResidual::Options apriltag_view_residual_options;    
     
     Options(const std::string& config_filename = ""):
       states_history_interval(  600000000),
@@ -85,12 +86,12 @@ class CameraIntrinsicsFilter : public anantak::Model {
       calibration_target_config_file("config/camera_intrisics_apriltag_calibration_target.cfg"),
       
       camera_intrinsics_message_is_available(false),
-      camera_angle_of_view(100*RadiansPerDegree),
+      camera_angle_of_view(100*kRadiansPerDegree),
       camera_image_size{{640, 480}},  // array uses aggregates initialization, so double braces(!?)
-      camera_angle_of_view_stdev(30*RadiansPerDegree),  // Large starting uncertainty in angle of view
-      camera_center_stdev(100),  // Large uncertainty in center location
+      camera_angle_of_view_stdev(30*kRadiansPerDegree),  // Large starting uncertainty in angle of view
+      camera_center_stdev(100)  // Large uncertainty in center location
       
-      apriltag_view_residual_options(1.0)
+      //apriltag_view_residual_options(1.0)
     {
       // Read the Programs Setup file
       std::string config_file_path = anantak::GetProjectSourceDirectory() + "/" + config_filename;
@@ -110,8 +111,8 @@ class CameraIntrinsicsFilter : public anantak::Model {
         max_tags_per_image = config->max_tags_per_image();
         camera_intrinsics_init = config->camera_init();
         calibration_target_config_file = config->calibration_target_config();
-        apriltag_view_residual_options =
-            anantak::DynamicAprilTagViewResidual::Options(config->apriltag_view_resid_options());
+        //apriltag_view_residual_options =
+        //    anantak::DynamicAprilTagViewResidual::Options(config->apriltag_view_resid_options());
       }
     }
     
@@ -122,14 +123,15 @@ class CameraIntrinsicsFilter : public anantak::Model {
         " Camera max tags per image: "+std::to_string(max_tags_per_image);
     }
     
-    bool SetStartingCameraIntrinsics(const anantak::CameraIntrinsicsStateMessage& msg) {
+    bool SetStartingCameraIntrinsics(const anantak::SensorMsg& msg) {
       camera_intrinsics_message_is_available = true;
-      camera_intrinsics_message = msg;    // copy
-      VLOG(1) << "Setting starting camera intrinsics in options = "
-        << camera_intrinsics_message.pinhole(0) << " " << camera_intrinsics_message.pinhole(1) << " "
-        << camera_intrinsics_message.pinhole(2) << " " << camera_intrinsics_message.pinhole(3);
+      camera_state_message = msg;    // copy
+      //VLOG(1) << "Setting starting camera intrinsics in options = "
+      //  << camera_state_message.Intrinsics().fx() << " " << camera_state_message.Intrinsics().fy() << " "
+      //  << camera_state_message.Intrinsics().cx() << " " << camera_state_message.Intrinsics().cy();
       return true;
     }
+    
   }; // Options
   
   // Grid to help collect target observations
@@ -239,6 +241,8 @@ class CameraIntrinsicsFilter : public anantak::Model {
         return false;
       }
       
+      int64_t tm = anantak::GetWallTime();
+      
       for (auto it=cells_.begin(); it!=cells_.end(); it++) {
         if (!it->IsEmpty()) {
           // Construct a SensorMsg
@@ -246,7 +250,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
           anantak::HeaderMsg* hdr_msg = msg.mutable_header();
           anantak::AprilTagMessage* april_msg = msg.mutable_april_msg();
           // Build header message
-          int64_t tm = 1; // We could do better and use a real timestamp
           hdr_msg->set_timestamp(tm);
           hdr_msg->set_type("AprilTags");
           hdr_msg->set_recieve_timestamp(tm);
@@ -263,6 +266,28 @@ class CameraIntrinsicsFilter : public anantak::Model {
       
       file_writer.Close();
     } // Save observations
+    
+    bool GetObservations(std::vector<anantak::SensorMsg>* msgs_vec) const {
+      int64_t tm = anantak::GetWallTime();
+      for (auto it=cells_.begin(); it!=cells_.end(); it++) {
+        if (!it->IsEmpty()) {
+          // Construct a SensorMsg
+          anantak::SensorMsg msg;
+          anantak::HeaderMsg* hdr_msg = msg.mutable_header();
+          anantak::AprilTagMessage* april_msg = msg.mutable_april_msg();
+          // Build header message
+          hdr_msg->set_timestamp(tm);
+          hdr_msg->set_type("AprilTags");
+          hdr_msg->set_recieve_timestamp(tm);
+          hdr_msg->set_send_timestamp(tm);
+          // Build Apriltag message
+          *april_msg = it->apriltag_msg_;
+          // Save the message to given vector
+          msgs_vec->emplace_back(msg); 
+        }
+      }
+      return true;
+    } // GetObservations
     
   };  // Grid
   
@@ -428,16 +453,16 @@ class CameraIntrinsicsFilter : public anantak::Model {
     }
     
     // Draw a calibration target
-    bool DrawPose3dState(const anantak::Pose3dState& pose,
-        const anantak::CameraIntrinsicsState& camera) {
+    bool DrawPoseState(const anantak::PoseState& pose,
+        const anantak::CameraState& camera) {
       
-      Eigen::Vector3d uvzc = camera.K() * pose.GpL_;
+      Eigen::Vector3d uvzc = camera.Intrinsics().K() * pose.P();
       // Draw center point 
       cv::Point2d pc(uvzc[0]/uvzc[2], uvzc[1]/uvzc[2]);
       cv::circle(display_image_, pc, 3, CV_RED, 2);
       
       // Setup rotation transform
-      rotn_transform_.block<3,3>(0,0) = Eigen::Matrix3d(pose.Quaternion().conjugate());
+      rotn_transform_.block<3,3>(0,0) = Eigen::Matrix3d(pose.Q().conjugate());
       // Calculate corners of rectangle
       Eigen::Matrix<double,3,6> xyz = rotn_transform_ * rotn_rectangle_;
       Eigen::Matrix<double,3,6> uvz = cam_intrinsics_ * xyz;
@@ -460,7 +485,7 @@ class CameraIntrinsicsFilter : public anantak::Model {
       cv::circle(display_image_, p4, 1, CV_RED, 2);
       
       // Angle between tag normal and image plane
-      double angle = std::acos(-rotn_transform_(2,2)) * DegreesPerRadian;
+      double angle = std::acos(-rotn_transform_(2,2)) * kDegreesPerRadian;
       std::ostringstream ss; ss << std::fixed << std::setprecision(0) << angle;
       cv::putText(display_image_, ss.str(), p4, CV_FONT_NORMAL, .5, CV_WHITE, 1);
       
@@ -503,7 +528,7 @@ class CameraIntrinsicsFilter : public anantak::Model {
   CameraIntrinsicsFilter::Grid grid_;
   
   // Iteration interval. Filter runs at a higher frequency when initializing, then it drops.
-  int64_t iteration_interval_;
+  uint64_t iteration_interval_;
   
   // Sliding window filter objects
   anantak::SlidingWindowFilterIterations swf_iterations_;
@@ -515,23 +540,14 @@ class CameraIntrinsicsFilter : public anantak::Model {
   ceres::Solver::Options solver_options_;
   ceres::Solver::Summary solver_summary_;
   
-  // Camera and target poses
-  std::unique_ptr<anantak::TimedCircularQueue<anantak::Pose3dState>> camera_poses_;
-  std::unique_ptr<anantak::TimedCircularQueue<anantak::Pose3dState>> target_poses_;
-  // Beacon tag
-  //anantak::StaticAprilTagState beacon_tag_;
-  anantak::ScalarState target_tag_size_;
   // Calibration target
-  anantak::CameraIntrinsicsCalibrationTarget target_;
-  // Camera intrinsics 
-  anantak::CameraIntrinsicsState camera_intrinsics_;
-  anantak::CameraIntrinsicsNormalPrior camera_intrinsics_prior_;
-  // Tag view Residuals
-  std::unique_ptr<anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>> tag_view_residuals_;
-  typedef anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>::FixedPoint TagViewQueueFixedPointType;
+  CameraCalibrationTarget target_;
+  
+  // Camera
+  CameraState camera_;
   
   // Results
-  anantak::SensorMsg camera_intrinsics_message_;
+  anantak::SensorMsg camera_message_;
   
   // Helpers
   uint64_t inter_state_interval_;
@@ -544,10 +560,14 @@ class CameraIntrinsicsFilter : public anantak::Model {
     swf_iterations_(options.sliding_window_options), iteration_record_(filter_start_ts),
     problem_(nullptr), problem_options_(), solver_options_(), solver_summary_(),
     target_(options.calibration_target_config_file),
+    camera_(options.tag_camera_ids.at(0)),                  // initiating at first camera
     filter_display_("IntrinsicsFilter")
   {
     InitiateFilter();
   }
+  
+  const uint64_t& IterationInterval() const {return iteration_interval_;}
+  bool Finished() const {return (filter_run_mode_ == kFiltering);}
   
   bool InitiateFilter() {
     LOG(INFO) << "Creating camera intrinsics filter";
@@ -592,56 +612,61 @@ class CameraIntrinsicsFilter : public anantak::Model {
     //VLOG(1) << "Beacon tag pose = " << beacon_tag_.pose_.LqvG_.transpose()
     //}    << ", " << beacon_tag_.pose_.GpL_.transpose();
     
-    // Initiate the calibration target
+    // Check if the calibration target was initialized
     if (!target_.IsInitialized()) {
-      LOG(ERROR) << "Calibration target was not initialized. Quit.";
+      LOG(FATAL) << "Calibration target was not initialized. Quit.";
       return false;
     }
-    if (target_.Size() == 0) {
-      LOG(ERROR) << "Calibration target does not have any tags!? " << target_.Size();
-      return false;
-    }
-    target_tag_size_.SetZero();
-    target_tag_size_.state_ = target_.TagSize(0);
-    target_tag_size_.covariance_ = 0.;
-    VLOG(1) << "Target tag size = " << target_tag_size_;
+    
+    //if (target_.Size() == 0) {
+    //  LOG(ERROR) << "Calibration target does not have any tags!? " << target_.Size();
+    //  return false;
+    ///}
+    //target_tag_size_.SetZero();
+    //target_tag_size_.state_ = target_.TagSize(0);
+    //target_tag_size_.covariance_ = 0.;
+    //}VLOG(1) << "Target tag size = " << target_tag_size_;
     
     // Initiate camera instrinsics
-    //  Best case is camera_intrinsics_message is available
+    //  Best case is camera_state_message is available
     //  If not, use camera_intrinsics_init from a config file
     //  If not, use the hard coded values
     if (options_.camera_intrinsics_message_is_available) {
       LOG(INFO) << "Using camera intrinsics message from a data queue";
-      camera_intrinsics_.Create(options_.camera_intrinsics_message);
+      if (!camera_.SetFromMessage(options_.camera_state_message)) {
+        LOG(FATAL) << "Could not set camera from given message";
+        return false;
+      }
       filter_run_mode_ = kFiltering;
       filter_display_.SetSize(options_.camera_intrinsics_init.image_size(0),
                               options_.camera_intrinsics_init.image_size(1));
     } else if (options_.camera_intrinsics_init.image_size_size() == 2) { 
       LOG(INFO) << "Using config file provided camera intrinsics init";
-      camera_intrinsics_.Create(options_.camera_intrinsics_init);
+      camera_.SetIntrinsicsFromInitMessage(options_.camera_intrinsics_init);
       filter_run_mode_ = kInitializing;
       filter_display_.SetSize(options_.camera_intrinsics_init.image_size(0),
                               options_.camera_intrinsics_init.image_size(1));
     } else {
       LOG(ERROR) << "Using default values to set starting camera intrinsics";
-      camera_intrinsics_.Create(options_.camera_angle_of_view,
+      camera_.SetIntrinsicsFromHeuristics(options_.camera_angle_of_view,
           options_.camera_image_size[0], options_.camera_image_size[1],
           options_.camera_angle_of_view_stdev, options_.camera_center_stdev);
+      camera_.SetImageSize(options_.camera_image_size[0], options_.camera_image_size[1]);
       filter_run_mode_ = kInitializing;
       filter_display_.SetSize(options_.camera_image_size[0], options_.camera_image_size[1]);
     }
     // Report what was used
-    VLOG(1) << "Starting camera intrinsics = " << camera_intrinsics_.ToString();
+    //VLOG(1) << "Starting camera intrinsics = " << camera_intrinsics_.ToString();
     
     // Setup the grid
     grid_.SetSize(filter_display_.size_.width, filter_display_.size_.height, 3, 3, 40, 30, 0.4);
       
     // Initiate camera intrinsics prior
-    camera_intrinsics_prior_.Create(&camera_intrinsics_, true);
+    //camera_intrinsics_prior_.Create(&camera_intrinsics_, true);
     
     // Initialize the iteration interval depending on the mode
     if (filter_run_mode_ == kInitializing) {
-      iteration_interval_ =  125000;
+      iteration_interval_ =  100000;
       Show();
     } else {
       iteration_interval_ = 1000000;
@@ -654,7 +679,7 @@ class CameraIntrinsicsFilter : public anantak::Model {
     return true;
   }
   
-  /* Allocate memory for queues */
+  // Allocate memory for queues 
   bool AllocateMemory() {
     LOG(INFO) << "Allocating memory for the camera intrinsics filter queues";
     
@@ -662,24 +687,24 @@ class CameraIntrinsicsFilter : public anantak::Model {
     LOG(INFO) << "  num_states_to_keep = " << num_states_to_keep
         << " at states_frequency = " << options_.states_frequency << " Hz";
     
-    // Camera poses
-    std::unique_ptr<anantak::TimedCircularQueue<anantak::Pose3dState>> cam_states_ptr(
-        new anantak::TimedCircularQueue<anantak::Pose3dState>(num_states_to_keep));
-    camera_poses_ = std::move(cam_states_ptr);
+    //// Camera poses
+    //std::unique_ptr<anantak::TimedCircularQueue<anantak::Pose3dState>> cam_states_ptr(
+    //    new anantak::TimedCircularQueue<anantak::Pose3dState>(num_states_to_keep));
+    //camera_poses_ = std::move(cam_states_ptr);
+    //
+    //// Target poses
+    //std::unique_ptr<anantak::TimedCircularQueue<anantak::Pose3dState>> bc_poses_ptr(
+    //    new anantak::TimedCircularQueue<anantak::Pose3dState>(num_states_to_keep));
+    //target_poses_ = std::move(bc_poses_ptr);
     
-    // Target poses
-    std::unique_ptr<anantak::TimedCircularQueue<anantak::Pose3dState>> bc_poses_ptr(
-        new anantak::TimedCircularQueue<anantak::Pose3dState>(num_states_to_keep));
-    target_poses_ = std::move(bc_poses_ptr);
+    //// Tag residuals
+    //int32_t num_tag_views_to_keep = options_.states_history_interval / 1000000
+    //    * options_.max_tag_camera_frequency * options_.max_tags_per_image;
+    //LOG(INFO) << " tag view residuals queues length = " << num_tag_views_to_keep;
     
-    // Tag residuals
-    int32_t num_tag_views_to_keep = options_.states_history_interval / 1000000
-        * options_.max_tag_camera_frequency * options_.max_tags_per_image;
-    LOG(INFO) << "Initiating tag view residuals queues with length = " << num_tag_views_to_keep;
-    
-    std::unique_ptr<anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>> view_queue_ptr(
-        new anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>(num_tag_views_to_keep));
-    tag_view_residuals_ = std::move(view_queue_ptr);
+    //std::unique_ptr<anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>> view_queue_ptr(
+    //    new anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>(num_tag_views_to_keep));
+    //tag_view_residuals_ = std::move(view_queue_ptr);
     
     return true;
   }
@@ -691,41 +716,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
     // Calculate the starting state timestamp
     int64_t starting_state_ts = (iteration_record_.begin_ts / inter_state_interval_) * inter_state_interval_;
     VLOG(1) << "Using starting state ts = " << starting_state_ts;
-    
-    // Create a zero pose state and add to camera/target state queues
-    anantak::Pose3dState zero_pose;
-    zero_pose.SetTimestamp(starting_state_ts);
-    camera_poses_->AddElement(zero_pose);
-    camera_poses_->SetTimestamp(starting_state_ts);
-    target_poses_->AddElement(zero_pose);
-    target_poses_->SetTimestamp(starting_state_ts);
-    
-    // Create a zero tag view residual, add it to the target residuals 
-    anantak::DynamicAprilTagViewResidual zero_tag_view_resid;
-    zero_tag_view_resid.SetTimestamp(starting_state_ts);
-    tag_view_residuals_->AddElement(zero_tag_view_resid);
-    tag_view_residuals_->SetTimestamp(starting_state_ts);
-    
-    // Set markers on queues
-    camera_poses_->SetFixedPoint("TagViewResidual"); // Marks the last tag view residual location
-    target_poses_->SetFixedPoint("TagViewResidual"); // Marks the last tag view residual location
-    tag_view_residuals_->SetFixedPoint("PreProblemBegin"); // Residuals were added to problem after here
-    tag_view_residuals_->SetFixedPoint("ProblemEnd"); // Residuals were added to problem till here
-    tag_view_residuals_->SetFixedPoint("PreWindowBegin"); // States related with residuals beyond this ts will be solved
-    
-    // Add counters
-    iteration_record_.iteration_counters["CameraPosesCreated"] = 0;   // Number of camera poses created
-    iteration_record_.iteration_counters["TargetPosesCreated"] = 0;   // Number of target poses created
-    iteration_record_.iteration_counters["TagViewResidualsCreated"] = 0; // Number of tag view residuals created
-    iteration_record_.iteration_counters["TagViewResidualsAdded"] = 0;   // Number of tag view residuals added to problem
-    iteration_record_.iteration_counters["TagViewResidualsMarked"] = 0;   // Number of tag view residuals marked constant
-    iteration_record_.algorithm_counters["ProblemObjects"] = 0;   // Number of tag view residuals marked constant
-    
-    // Report
-    VLOG(1) << "Zero Camera pose at " << camera_poses_->FixedPointToString("TagViewResidual");
-    VLOG(1) << "Zero Target pose at " << target_poses_->FixedPointToString("TagViewResidual");
-    VLOG(1) << "Zero TVR PreProblemBegin at " << tag_view_residuals_->FixedPointToString("PreProblemBegin");
-    VLOG(1) << "Zero TVR PreWindowBegin at " << tag_view_residuals_->FixedPointToString("PreWindowBegin");
     
     return true;
   }
@@ -787,14 +777,36 @@ class CameraIntrinsicsFilter : public anantak::Model {
     
     return true;
   }
+
+  bool ExtractSensorMessagesFromObservations(
+      const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations_vec,
+      const std::string msg_type,
+      anantak::SensorMessageFilterType filter_function,
+      std::vector<anantak::SensorMsg>* sensor_msgs)
+  {
+    // Clear return container
+    sensor_msgs->clear();
+    
+    // Go through messages
+    for (int i=0; i<observations_vec.size(); i++) {
+      for (int j=0; j<observations_vec[i]->size(); j++) {
+        const SensorMsg& msg = observations_vec[i]->at(j);
+        if (filter_function(msg)) {
+          sensor_msgs->emplace_back(msg);
+        }
+      }
+    }
+    
+    return true;
+  }
   
   // Run initializing iteration without any observations
   bool RunInitializingIteration(const int64_t& iteration_end_ts) {
     // nothing to do without any observations
     return true;
   }
-  
-  // Run initializing iteration
+
+  // Run initializing iteration - use observations from filter
   bool RunInitializingIteration(const int64_t& iteration_end_ts,
       const anantak::ObservationsVectorStoreMap& observations_map) {
     
@@ -809,67 +821,131 @@ class CameraIntrinsicsFilter : public anantak::Model {
       return false;
     }
     
+    return RunInitializingIteration(iteration_end_ts, sensor_msgs);
+  }
+  
+  // Run initializing iteration - use observations from filter
+  bool RunInitializingIteration(const int64_t& iteration_end_ts,
+      const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations_vec) {
+    
+    // Storage
+    std::vector<anantak::SensorMsg> sensor_msgs;
+    
+    // Extract sensor messages
+    anantak::SensorMessageFilterType filter_func =
+        std::bind(&CameraIntrinsicsFilter::PassAprilTagCameraMessages, this, std::placeholders::_1);
+    if (!ExtractSensorMessagesFromObservations(observations_vec, "AprilTags", filter_func, &sensor_msgs)) {
+      LOG(ERROR) << "Could not extract messages from observations, Skip.";
+      return false;
+    }
+    
+    return RunInitializingIteration(iteration_end_ts, sensor_msgs);
+  }
+  
+  // Run initializing iteration
+  bool RunInitializingIteration(const int64_t& iteration_end_ts,
+      const std::vector<anantak::SensorMsg>& sensor_msgs) {
+    
     // Was there anything?
     if (sensor_msgs.size() == 0) {
       VLOG(2) << "No AprilTag message was found. Skip.";
       return true;
     }
     
-    // Quick check
-    if (!sensor_msgs.back().has_april_msg()) {
-      LOG(ERROR) << "Last sensor message of AprilTag type has no apriltag message! Skipping.";
+    for (int i_msg=0; i_msg<sensor_msgs.size(); i_msg++) {
+      
+      const anantak::SensorMsg& msg = sensor_msgs.at(i_msg);
+      
+      // Quick check
+      if (!msg.has_april_msg()) {
+        LOG(ERROR) << "Last sensor message of AprilTag type has no apriltag message! Skipping.";
+        return false;
+      }
+      
+      // Just operate on the last message
+      const int64_t& timestamp = msg.header().timestamp();
+      const anantak::AprilTagMessage& apriltag_msg = msg.april_msg();
+      
+      // Get the calibration target pose using the message
+      anantak::PoseState target_pose;   // Set to zero here
+      target_.CalculateTargetPose(apriltag_msg, camera_, &target_pose);
+      
+      // Calculate target's image position and angle
+      Eigen::Vector3d uvzc = camera_.Intrinsics().K() * target_pose.P();
+      Eigen::Vector2d target_img_posn; target_img_posn << uvzc[0]/uvzc[2], uvzc[1]/uvzc[2];
+      Eigen::Matrix3d target_rotn(target_pose.Q().conjugate());
+      double target_img_angl = std::acos(-target_rotn(2,2)) * kDegreesPerRadian;
+      
+      // Check if this message should be included in the camera intrinsics estimation
+      if (grid_.AddObservation(target_img_posn, target_img_angl, apriltag_msg)) {
+        VLOG(1) << "Observation was added to the grid";
+      }
+      
+      bool grid_is_full = grid_.IsFull();
+      
+      // Store observations for later processing
+      
+      // Show the image
+      if (show_) {
+        filter_display_.ClearImage();
+        filter_display_.DrawGrid(grid_);
+        filter_display_.DrawAprilTags(apriltag_msg);
+        //filter_display_.DrawPoseState(target_pose, camera_intrinsics_);
+        filter_display_.DrawPosition(target_img_posn);
+        filter_display_.DrawRotation(target_rotn, target_img_angl);
+        if (grid_is_full) filter_display_.ShowMessage("Grid is full. Calibrating...");
+        filter_display_.DisplayImage();
+      }
+      
+      if (grid_is_full) {
+        grid_.SaveObservationsToFile("/data/camera_calibration_target_observations.pb.data");
+        if (InitiateCalibration()) {
+          
+          // Prepare for filtering ** CHECK **
+          //if (!SetStartingStatesAndResiduals()) {
+          //  LOG(FATAL) << "Could not set starting states and residuals";
+          ///}
+          
+          filter_run_mode_ = kFiltering;
+          LOG(INFO) << "Switched filter from initializing to filtering.";
+          return true;
+          
+        } else {
+          // Initialization failed
+          LOG(ERROR) << "Could not initiate calibration! Start again?";
+          grid_.Reset();
+          return false;        
+        }
+      }
+      
+    } // for each message
+    
+    return true;
+  }
+  
+  bool InitiateCalibration() {
+    
+    LOG(INFO) << "Starting camera calibration";
+    
+    std::vector<anantak::SensorMsg> collected_msgs;
+    grid_.GetObservations(&collected_msgs);
+    VLOG(1) << "Collected " << collected_msgs.size() << " messages.";
+    
+    CalibrationTargetCameraCalibrator target_camera_calibrator;
+    if (!target_camera_calibrator.InitiateCameraCalibration(
+            target_, collected_msgs, camera_.ImageSize(), &camera_)) {
+      LOG(ERROR) << "Could not initialize the camera calibration from data collected.";
       return false;
     }
     
-    // Just operate on the last message
-    const int64_t& timestamp = sensor_msgs.back().header().timestamp();
-    const anantak::AprilTagMessage& apriltag_msg = sensor_msgs.back().april_msg();
-    
-    // Get the calibration target pose using the message
-    anantak::Pose3dState target_pose;   // Set to zero here
-    target_.CalculateTargetPose(apriltag_msg, camera_intrinsics_, &target_pose);
-    
-    // Calculate target's image position and angle
-    Eigen::Vector3d uvzc = camera_intrinsics_.K() * target_pose.GpL_;
-    Eigen::Vector2d target_img_posn; target_img_posn << uvzc[0]/uvzc[2], uvzc[1]/uvzc[2];
-    Eigen::Matrix3d target_rotn(target_pose.Quaternion().conjugate());
-    double target_img_angl = std::acos(-target_rotn(2,2)) * DegreesPerRadian;
-    
-    // Check if this message should be included in the camera intrinsics estimation
-    if (grid_.AddObservation(target_img_posn, target_img_angl, apriltag_msg)) {
-      VLOG(1) << "Observation was added to the grid";
-    }
-    
-    bool grid_is_full = grid_.IsFull();
-    
-    // Store observations for later processing
-    
-    // Show the image
-    if (show_) {
-      filter_display_.ClearImage();
-      filter_display_.DrawGrid(grid_);
-      filter_display_.DrawAprilTags(apriltag_msg);
-      //filter_display_.DrawPose3dState(target_pose, camera_intrinsics_);
-      filter_display_.DrawPosition(target_img_posn);
-      filter_display_.DrawRotation(target_rotn, target_img_angl);
-      if (grid_is_full) filter_display_.ShowMessage("Grid is full. Calibrating...");
-      filter_display_.DisplayImage();
-    }
-    
-    if (grid_is_full) {
-      grid_.SaveObservationsToFile("/data/camera_calibration_target_observations.pb.data");
-      if (!InitiateCalibration()) {
-        LOG(ERROR) << "Could not initiate calibration. Start again!?";
-        grid_.Reset();
-        return false;
-      }
-    }
+    std::string savefile = "data/camera"+std::to_string(camera_.CameraNumber())+"_state.pb.data";
+    camera_.SaveToFile(savefile);
     
     return true;
-  }  
+  }
   
   // Use the observations stored in the grid to guess calibrations
-  bool InitiateCalibration() {
+  bool InitiateCalibrationOld() {
     
     VLOG(1) << "Starting calibration";
     
@@ -930,6 +1006,8 @@ class CameraIntrinsicsFilter : public anantak::Model {
     LOG(INFO) << "Camera matrix = " << camera_matrix;
     LOG(INFO) << "Distortion coeffs = " << dist_coeffs;
     
+    
+    
     // Store results in states
     
     // Now run non linear optimization using anantak maths
@@ -941,13 +1019,10 @@ class CameraIntrinsicsFilter : public anantak::Model {
   /** Optimize camera intrinsics
    * Given AprilTag messages, initiated camera instrinsics state and calibration target,
    * run full optimization on the data */
-  bool OptimizeCameraIntrinsics()
-  {
+  bool OptimizeCameraIntrinsics() {
     // Grid has all the AprilTag messages
     // Camera intrinsics have been initiated
     // Calibration target is known
-    
-    
     
   }
   
@@ -977,29 +1052,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
     return true;
   }
   
-  // Create new residuals from the observations - sensor-wise data input
-  //{bool CreateIterationResiduals(
-  //    const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& msgs) {
-  //  
-  //  // Extract sensor messages that this filter can process and create residuals
-  //  for (int i_sensor=0; i_sensor < msgs.size(); i_sensor++) {
-  //    const std::vector<anantak::SensorMsg>& sensor_msgs = *msgs[i_sensor];
-  //    for (int i_msg=0; i_msg < sensor_msgs.size(); i_msg++) {
-  //      const anantak::SensorMsg& msg = sensor_msgs[i_msg];
-  //      
-  //      if (!CreateResidual(msg)) {
-  //        LOG(ERROR) << "Could not create a residual from message. Skipping.";
-  //        continue;
-  //      }
-  //      
-  //    }
-  //  }
-  //  
-  //  VLOG(2) << "Iteration record = " << iteration_record_.IterationCountersToString();
-  //  
-  //  return true;
-  //}
-  
   // Create new residuals from the observations - coming from sliding window filter
   bool CreateIterationResiduals(
       const anantak::ObservationsVectorStoreMap& observations_map) {
@@ -1027,6 +1079,24 @@ class CameraIntrinsicsFilter : public anantak::Model {
         
       } // for each message in this type
     } // for each type
+    
+    return true;
+  }
+  
+  // Create new residuals from the observations - coming from sliding window filter
+  bool CreateIterationResiduals(
+      const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations_vec) {
+    
+    // Go through messages and create residuals
+    for (int i=0; i<observations_vec.size(); i++) {
+      for (int j=0; j<observations_vec[i]->size(); j++) {
+        const SensorMsg& msg = observations_vec[i]->at(j);
+        if (!CreateResidual(msg)) {
+          LOG(ERROR) << "Could not create a residual from message. Skipping.";
+          continue;
+        }
+      }
+    }
     
     return true;
   }
@@ -1124,6 +1194,38 @@ class CameraIntrinsicsFilter : public anantak::Model {
     return true;
   }
   
+  // Run iteration
+  bool RunIteration(const int64_t& iteration_end_ts,
+      const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations_vec,
+      const bool save_data = false) {
+    
+    if (filter_run_mode_ == kInitializing) {
+      return RunInitializingIteration(iteration_end_ts, observations_vec);
+    }
+    
+    if (!StartIteration(iteration_end_ts)) {
+      LOG(ERROR) << "Could not start iteration";
+      return false;
+    }
+    
+    if (!CreateIterationStates(iteration_end_ts)) {
+      LOG(ERROR) << "Could not create states for the iteration";
+      return false;
+    }
+    
+    if (!CreateIterationResiduals(observations_vec)) {
+      LOG(ERROR) << "Could not create residuals for the iteration";
+      return false;
+    }
+    
+    if (!RunFiltering(iteration_end_ts)) {
+      LOG(ERROR) << "Could not run filtering operations";
+      return false;
+    }
+    
+    return true;
+  }
+  
   // Run iteration with no observations provided
   bool RunIteration(const int64_t& iteration_end_ts) {
     
@@ -1154,63 +1256,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
    * Each state is created and initiated. Initiation follows some prediction method.
    */
   bool CreateNewStates(const int64_t& iteration_end_ts) {
-    
-    // Make sure that there is an existing last state
-    if (camera_poses_->n_msgs() == 0) {
-      LOG(ERROR) << "Machine kin states queue is empty! Can not create new states.";
-      return false;
-    }
-    if (target_poses_->n_msgs() == 0) {
-      LOG(ERROR) << "Target kin states queue is empty! Can not create new states.";
-      return false;
-    }
-    
-    // Calculate iteration ending state timestamp and number of states to be created
-    const int64_t iteration_end_state_ts =
-        ((iteration_end_ts / inter_state_interval_) +1) * inter_state_interval_;
-    const int64_t last_state_ts = camera_poses_->Back().timestamp_;
-    const int32_t num_states_to_create =
-        (iteration_end_state_ts - last_state_ts) / inter_state_interval_;
-    VLOG(2) << "  States ts last, end, num = " << last_state_ts << " " << iteration_end_state_ts
-        << " " << num_states_to_create;
-    
-    // Create and predict new machine states
-    for (int i=0; i<num_states_to_create; i++) {
-      const anantak::Pose3dState& last_cam_state = camera_poses_->Back();
-      anantak::Pose3dState* mc_state = camera_poses_->NextMutableElement();
-      if (!anantak::PredictPose3dState(last_cam_state, inter_state_interval_, mc_state)) {
-        LOG(ERROR) << "Could not predict machine kinematic state. Can not continue.";
-        return false;
-      }
-      // Assign timestamp on the queue
-      camera_poses_->SetTimestamp(mc_state->timestamp_);
-      iteration_record_.iteration_counters["CameraPosesCreated"]++;
-      // Check for mistakes
-      if (mc_state->timestamp_ > iteration_end_state_ts) {
-        LOG(ERROR) << "mc_state->timestamp_ > iteration_end_state_ts. Should not happen! Quit. "
-            << mc_state->timestamp_ << " " << iteration_end_state_ts;
-        return false;
-      }
-    }
-    
-    // Create and predict new target states
-    for (int i=0; i<num_states_to_create; i++) {
-      const anantak::Pose3dState& last_bc_state = target_poses_->Back();
-      anantak::Pose3dState* bc_state = target_poses_->NextMutableElement();
-      if (!anantak::PredictPose3dState(last_bc_state, inter_state_interval_, bc_state)) {
-        LOG(ERROR) << "Could not predict target kinematic state. Can not coninue.";
-        return false;
-      }
-      // Assign timestamp on the queue
-      target_poses_->SetTimestamp(bc_state->timestamp_);
-      iteration_record_.iteration_counters["TargetPosesCreated"]++;
-      // Check for mistakes
-      if (bc_state->timestamp_ > iteration_end_state_ts) {
-        LOG(ERROR) << "bc_state->timestamp_ > iteration_end_state_ts. Should not happen! Quit. "
-            << bc_state->timestamp_ << " " << iteration_end_state_ts;
-        return false;
-      }
-    }
     
     return true;
   }
@@ -1268,150 +1313,11 @@ class CameraIntrinsicsFilter : public anantak::Model {
   // Create residuals for the target sighting
   bool CreateResidualsForTargetView(const int64_t& timestamp, const anantak::AprilTagMessage& apriltag_msg) {
     
-    // Check for number of tag sightings
-    const int32_t num_tags = apriltag_msg.tag_id_size();
-    if (num_tags == 0) {
-      LOG(ERROR) << "Apriltag message has no tags!?";
-      return false;
-    }
-    
-    // Find the target pose previous to this reading
-    if (!target_poses_->PositionFixedPointBeforeTimestamp("TagViewResidual", timestamp)) {
-      LOG(ERROR) << "Did not find apriltag message timestamp in target poses queue. Skipping.";
-      LOG(ERROR) << "Diff between apriltag message and last target pose timestamps = "
-          << timestamp - target_poses_->LastTimestamp();
-      return false;
-    }
-    anantak::Pose3dState* target_pose = target_poses_->MutableElementAtFixedPoint("TagViewResidual");
-    VLOG(2) << "Target TagViewResidual posn = " << target_poses_->FixedPointToString("TagViewResidual")
-        << " pose ts: " << target_pose->timestamp_;
-    
-    // Find the camera pose previous to this reading
-    if (!camera_poses_->PositionFixedPointBeforeTimestamp("TagViewResidual", timestamp)) {
-      LOG(ERROR) << "Did not find apriltag message timestamp in camera poses queue. Skipping.";
-      LOG(ERROR) << "Diff between apriltag message and last camera pose timestamps = "
-          << timestamp - camera_poses_->LastTimestamp();
-      return false;
-    }
-    anantak::Pose3dState* camera_pose = camera_poses_->MutableElementAtFixedPoint("TagViewResidual");
-    VLOG(2) << "Camera TagViewResidual posn = " << camera_poses_->FixedPointToString("TagViewResidual")
-        << " pose ts: " << camera_pose->timestamp_;
-    
-    // Starting estimate of target pose wrt camera
-    if (!target_.CalculateTargetPose(apriltag_msg, camera_intrinsics_, target_pose)) {
-      LOG(ERROR) << "Could not calculate starting estimate of the target pose. Skip";
-      return false;
-    }
-    // Report the calculation
-    VLOG(2) << " Calculated target pose in camera = " << *target_pose;
-    
-    // Create tag view residuals
-    for (int i_tag=0; i_tag<num_tags; i_tag++) {
-      anantak::DynamicAprilTagViewResidual *tag_view_resid = tag_view_residuals_->NextMutableElement();
-      if (!tag_view_resid->Create(
-          timestamp, apriltag_msg, i_tag, target_,
-          camera_pose, target_pose, &target_tag_size_, &camera_intrinsics_,
-          &options_.apriltag_view_residual_options, true))
-      {
-        LOG(ERROR) << "Could not create tag view residual. Skipping.";
-        tag_view_resid->Reset();
-        tag_view_residuals_->decrement();
-        return false;
-      }
-      tag_view_residuals_->SetTimestamp(timestamp);
-      iteration_record_.iteration_counters["TagViewResidualsCreated"]++;
-      
-      // Report the timestamps associated
-      VLOG(2) << "  Residual ts = " << tag_view_resid->timestamp_
-          << " target pose ts = " << target_pose->timestamp_
-          << ", " << target_poses_->ElementAtFixedPoint(target_poses_->GetNextFixedPoint("TagViewResidual")).timestamp_
-          << "  " << target_poses_->Timestamp("TagViewResidual")
-          << ", " << target_poses_->Timestamp(target_poses_->GetNextFixedPoint("TagViewResidual"));
-    } // for i_tag
-    
     return true;
   } // CreateResidualsForTargetView
   
-  ///* Create residuals for Apriltag views
-  // */
-  //{bool CreateResidualForBeaconTagMessage(const int64_t& timestamp,
-  //    const anantak::AprilTagMessage& apriltag_msg, const uint16_t& i_tag) {
-  //  
-  //  // Find the beacon pose previous to this reading
-  //  if (!beacon_poses_->PositionFixedPointBeforeTimestamp("TagViewResidual", timestamp)) {
-  //    LOG(ERROR) << "Did not find apriltag message timestamp in beacon poses queue. Skipping.";
-  //    LOG(ERROR) << "Diff between apriltag message and last beacon pose timestamps = "
-  //        << timestamp - beacon_poses_->LastTimestamp();
-  //    return false;
-  //  }
-  //  anantak::Pose3dState* beacon_pose = beacon_poses_->MutableElementAtFixedPoint("TagViewResidual");
-  //  VLOG(2) << "Beacon TagViewResidual posn = " << beacon_poses_->FixedPointToString("TagViewResidual");
-  //  
-  //  // Find the camera pose previous to this reading
-  //  if (!camera_poses_->PositionFixedPointBeforeTimestamp("TagViewResidual", timestamp)) {
-  //    LOG(ERROR) << "Did not find apriltag message timestamp in camera poses queue. Skipping.";
-  //    LOG(ERROR) << "Diff between apriltag message and last camera pose timestamps = "
-  //        << timestamp - camera_poses_->LastTimestamp();
-  //    return false;
-  //  }
-  //  anantak::Pose3dState* camera_pose = camera_poses_->MutableElementAtFixedPoint("TagViewResidual");
-  //  VLOG(2) << "Camera TagViewResidual posn = " << camera_poses_->FixedPointToString("TagViewResidual");
-  //  
-  //  // Create a tag view reading from tag message
-  //  anantak::AprilTagReadingType tag_reading;
-  //  if (!tag_reading.SetFromAprilTagMessage(timestamp, apriltag_msg.camera_num(), i_tag, apriltag_msg)) {
-  //    LOG(ERROR) << "Could not set tag reading from tag message Skipping message.";
-  //    return false;
-  //  }
-  //  if (!tag_reading.EstimateCameraToTagPose(&camera_intrinsics_, beacon_tag_.size_.state_)) {
-  //    LOG(ERROR) << "Could not estimate camera to tag pose. Skipping message";
-  //    return false;
-  //  }
-  //  VLOG(2) << "Beacon tag reading = " << timestamp << " " << tag_reading;
-  //  
-  //  // Initiate the beacon pose
-  //  if (!tag_reading.CalculateTagPoseFromCameraPose(camera_pose, beacon_pose)) {
-  //    LOG(ERROR) << "Could not estimate beacon pose from camera pose. Skipping.";
-  //    return false;
-  //  }
-  //  
-  //  // Create a tag view residual from the reading and camera intrinsics
-  //  anantak::DynamicAprilTagViewResidual *tag_view_resid = tag_view_residuals_->NextMutableElement();
-  //  if (!tag_view_resid->Create(&tag_reading, camera_pose, beacon_pose, &beacon_tag_.size_, &camera_intrinsics_,
-  //      &options_.apriltag_view_residual_options, true)) {
-  //    LOG(ERROR) << "Could not create tag view residual. Skipping.";
-  //    tag_view_resid->Reset();
-  //    tag_view_residuals_->decrement();
-  //    return false;
-  //  }
-  //  tag_view_residuals_->SetTimestamp(timestamp);
-  //  iteration_record_.iteration_counters["TagViewResidualsCreated"]++;
-  //  
-  //  // Report the timestamps associated
-  //  VLOG(2) << "  Residual ts = " << tag_view_resid->timestamp_
-  //      << " beacon pose ts = " << beacon_pose->timestamp_
-  //      << ", " << beacon_poses_->ElementAtFixedPoint(beacon_poses_->GetNextFixedPoint("TagViewResidual")).timestamp_;
-  //      //<< "  " << beacon_poses_->Timestamp("TagViewResidual")
-  //      //<< ", " << beacon_poses_->Timestamp(beacon_poses_->GetNextFixedPoint("TagViewResidual"));
-  //  
-  //  return true;
-  //}
-  
   /* Calculate priors for the problem */
   bool CalculatePriors() {
-    
-    // This is a calibration state - camera intrinsics.
-    //  We can try to recalculate the state and calculate a new prior
-    //  We then do not add any past residuals to the problem as prior represents all the information
-    //  contained in the past states.
-    camera_intrinsics_.Recalculate();
-    
-    // Calculate camera intrinsics covariance matrix
-    camera_intrinsics_.CalculateCovariance(problem_.get());
-    camera_intrinsics_prior_.Create(&camera_intrinsics_, true);
-    // Report covariance
-    VLOG(1) << "Camera intrinsics at recycle of problem = " << camera_intrinsics_.ToString();
-    VLOG(1) << "Camera intrinsics prior = \n" << camera_intrinsics_prior_;
     
     return true;
   }
@@ -1419,106 +1325,17 @@ class CameraIntrinsicsFilter : public anantak::Model {
   // Add priors to the problem
   bool AddPriors() {
     
-    // Add camera intrinsics prior to problem
-    ceres::CostFunction* camera_intrinsics_prior_cf = &camera_intrinsics_prior_;
-    problem_->AddResidualBlock(
-      camera_intrinsics_prior_cf, NULL,
-      camera_intrinsics_prior_.cam_->error_
-    );
-    VLOG(1) << "Added camera intrinsics prior to problem";
-    
-    return true;
-  }
-  
-  // Add a tag view residual to the problem
-  bool AddTagViewResidualToProblem(const TagViewQueueFixedPointType& fixed_point) {
-    
-    anantak::DynamicAprilTagViewResidual* tvr =
-        tag_view_residuals_->MutableElementAtFixedPoint(fixed_point);
-    ceres::CostFunction* tvr_cf = tvr;
-    problem_->AddResidualBlock(
-      tvr_cf, NULL,
-      tvr->poseC_->error_,
-      tvr->tagTj_pose_->error_,
-      &tvr->tagTj_size_->error_,
-      tvr->camera_->error_
-    );
-    
-    // Set states constant - depends on the problem being solved
-    // Set camera pose constant
-    problem_->SetParameterBlockConstant(tvr->poseC_->error_);
-    // Set tag pose constant
-    //problem_->SetParameterBlockConstant(tvr->tagTj_pose_->error_);
-    // Set tag size constant
-    problem_->SetParameterBlockConstant(&tvr->tagTj_size_->error_);
-    // Set camera intrinsics constant
-    //problem_->SetParameterBlockConstant(tvr->camera_->error_);
-    
-    return true;
-  }
-  
-  // Mark states related with a tag view residual as constants in the problem
-  bool MarkTagViewResidualStatesConstant(const TagViewQueueFixedPointType& fixed_point) {
-    
-    anantak::DynamicAprilTagViewResidual* tvr =
-        tag_view_residuals_->MutableElementAtFixedPoint(fixed_point);
-    
-    // Set camera pose constant
-    if (problem_->HasParameterBlock(tvr->poseC_->error_))
-      problem_->SetParameterBlockConstant(tvr->poseC_->error_);
-    // Set tag pose constant
-    //if (problem_->HasParameterBlock(tvr->tagTj_pose_->error_))
-    //  problem_->SetParameterBlockConstant(tvr->tagTj_pose_->error_);
-    // Set tag size constant
-    if (problem_->HasParameterBlock(&tvr->tagTj_size_->error_))
-      problem_->SetParameterBlockConstant(&tvr->tagTj_size_->error_);
-    // Set camera intrinsics constant
-    //if (problem_->HasParameterBlock(tvr->camera_->error_))
-    //  problem_->SetParameterBlockConstant(tvr->camera_->error_);
-    
     return true;
   }
   
   // Build the problem - at the creation of the problem object
   bool AddDataToProblem() {
     
-    int64_t problem_data_start_ts = swf_iterations_.DataBeginTimestamp();
-    
-    // Locate the PreProblemBegin marker for tag view residuals
-    if (!tag_view_residuals_->PositionFixedPointBeforeTimestamp("PreProblemBegin",
-                                                                problem_data_start_ts)) {
-      LOG(ERROR) << "Could not locate the problem_data_start_ts = " << problem_data_start_ts;
-      return false;
-    }
-    VLOG(2) << "Problem data start ts was found. PreProblemBegin marker = " <<
-        tag_view_residuals_->FixedPointToString("PreProblemBegin");
-    
-    // Add Tag view residuals to the problem
-    for (TagViewQueueFixedPointType fp = tag_view_residuals_->GetNextFixedPoint("PreProblemBegin");
-         tag_view_residuals_->IsNotPastFixedPoint("ProblemEnd", fp);
-         tag_view_residuals_->IncrementFixedPoint(fp))
-    {
-      // This is a calibration state (camera instrinsics) we are calculating a marginal,
-      //  so we do not add any past residuals.
-      //AddTagViewResidualToProblem(fp);
-      //iteration_record_.iteration_counters["TagViewResidualsAdded"]++;
-    }
     return true;
   }
   
   // Add new residuals to the problem
   bool AddNewDataToProblem() {
-    
-    for (TagViewQueueFixedPointType fp = tag_view_residuals_->GetNextFixedPoint("ProblemEnd");
-         tag_view_residuals_->IsNotPastTheEnd(fp);
-         tag_view_residuals_->IncrementFixedPoint(fp))
-    {
-      AddTagViewResidualToProblem(fp);
-      iteration_record_.iteration_counters["TagViewResidualsAdded"]++;
-    }
-    // Reset the ProblemEnd marker
-    tag_view_residuals_->SetFixedPoint("ProblemEnd"); // Sets fixed point at the end
-    VLOG(2) << "TagViewResiduals problem end = " << tag_view_residuals_->FixedPointToString("ProblemEnd");
     
     return true;
   }
@@ -1527,26 +1344,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
    * All states before the sliding window are marked constant */
   bool MarkStatesConstant() {
     
-    // Locate the PreWindowBegin marker for tag view residuals
-    int64_t window_start_ts = swf_iterations_.SlidingWindowTimestamp();
-    if (!tag_view_residuals_->PositionFixedPointBeforeTimestamp("PreWindowBegin", window_start_ts)) {
-      LOG(WARNING) << "Could not locate the window_start_ts for marking "
-          << "constant states in residuals queue = " << window_start_ts;
-      return false;
-    }
-    VLOG(2) << "Solving window start ts was found. PreWindowBegin marker = " <<
-        tag_view_residuals_->FixedPointToString("PreWindowBegin");
-    
-    // Mark tag view states constant
-    for (TagViewQueueFixedPointType fp = tag_view_residuals_->GetNextFixedPoint("PreProblemBegin");
-         tag_view_residuals_->IsNotPastFixedPoint("PreWindowBegin", fp);
-         tag_view_residuals_->IncrementFixedPoint(fp))
-    {
-      // This is a calibration state (camera instrinsics) we are calculating a marginal,
-      //  so we do not add any past residuals.
-      //MarkTagViewResidualStatesConstant(fp);
-      //iteration_record_.iteration_counters["TagViewResidualsMarked"]++;
-    }
     return true;
   }
   
@@ -1554,27 +1351,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
    * All states before the sliding window are marked constant */
   bool MarkNewStatesConstant() {
     
-    // Make a copy of the PreWindowBegin fixed point
-    const TagViewQueueFixedPointType last_pre_window_begin =
-        tag_view_residuals_->GetFixedPoint("PreWindowBegin");
-    
-    // Locate the PreWindowBegin marker for tag view residuals
-    int64_t window_start_ts = swf_iterations_.SlidingWindowTimestamp();
-    if (!tag_view_residuals_->PositionFixedPointBeforeTimestamp("PreWindowBegin", window_start_ts)) {
-      LOG(WARNING) << "Could not locate the window_start_ts = " << window_start_ts;
-      return false;
-    }
-    VLOG(2) << "Solving window start ts was found. PreWindowBegin marker = " <<
-        tag_view_residuals_->FixedPointToString("PreWindowBegin");
-    
-    // Mark tag view states constant
-    for (TagViewQueueFixedPointType fp = tag_view_residuals_->NextFixedPoint(last_pre_window_begin);
-         tag_view_residuals_->IsNotPastFixedPoint("PreWindowBegin", fp);
-         tag_view_residuals_->IncrementFixedPoint(fp))
-    {
-      MarkTagViewResidualStatesConstant(fp);
-      iteration_record_.iteration_counters["TagViewResidualsMarked"]++;
-    }
     return true;
   }
   
@@ -1601,41 +1377,14 @@ class CameraIntrinsicsFilter : public anantak::Model {
   
   // Report the results
   bool ReportResults() {
-    VLOG(1) << "Camera intrinsics = " << camera_intrinsics_.ToString(false);
-  }
-  
-  // Build a state message from the results
-  bool BuildCameraIntrinsicsStateMessage() {
-    // Build message
-    camera_intrinsics_message_.Clear();
-    anantak::HeaderMsg* hdr_msg =
-        camera_intrinsics_message_.mutable_header();
-    anantak::CameraIntrinsicsStateMessage* cam_msg =
-        camera_intrinsics_message_.mutable_camera_intrinsics_state_msg();
-    // Set header
-    hdr_msg->set_timestamp(iteration_record_.end_ts);
-    hdr_msg->set_type("CameraIntrinsics");
-    hdr_msg->set_recieve_timestamp(iteration_record_.end_ts);
-    hdr_msg->set_send_timestamp(iteration_record_.end_ts);
-    // Set message
-    cam_msg->set_camera_num(options_.tag_camera_ids[0]);
-    camera_intrinsics_.SetCameraIntrinsics(cam_msg);
-    camera_intrinsics_.SetCovariance(cam_msg);
-    
-    // Check the message
-    //VLOG(1) << "msg ts = " << camera_intrinsics_message_.header().timestamp()
-    //    << " should be = " << iteration_record_.end_ts;
-    
-    return true;
+    VLOG(1) << "Camera intrinsics = " << camera_.ToString(1);
   }
   
   // Accessor for the state message
   inline const anantak::MessageType& GetResultsMessage() {
-    BuildCameraIntrinsicsStateMessage();
-    return camera_intrinsics_message_;
+    camera_.CopyToMessage(&camera_message_, iteration_record_.end_ts);  // Build the message
+    return camera_message_;
   }
-  
-  const int64_t& IterationInterval() {return iteration_interval_;}
   
   bool Show() {
     show_ = true;

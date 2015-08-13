@@ -11,28 +11,46 @@
 namespace anantak {
 	
 // Options
-Viewer::Options::Options(float scale) {
+Viewer::Options::Options(float radius) {
+	float scale = radius / 5.;
+	
 	position_sphere_size = 0.05*scale;
 	rotation_axes_line_width = 3;
 	rotation_axes_line_length = 1.0*scale;
 	ellipsoid_line_width = 1;
 	num_points_on_circle = 16;
 	
-	scene_width = 5.;		// meters
-	scene_length = 5.;	// meters
+	scene_width = 5.*scale;		// meters
+	scene_length = 5.*scale;	// meters
 	
-	velocity_arrow_length_ratio = 1.*scale;    // m/s per meter
-	velocity_arrow_radius_ratio = 0.01*scale;
+	velocity_arrow_length_ratio = 0.1*scale;    // m/s per meter
+	velocity_arrow_radius_ratio = 0.3*scale;
+	
+	target_height = .25*scale;
+	target_width = .33*scale;
+	target_depth = .01*scale;
+	
+	meters_per_pixel = 1./2000.;
+	
+	timer_delay = 50000;		// in microseconds
 }
 	
 // Constructor takes in a scene
-Viewer::Viewer(anantak::Scene* s) :
-		scene_(s) {
-	if (!scene_) { /* complain */}
+Viewer::Viewer(anantak::Scene* s, float scale = 1.) :
+		options_(scale), scene_(s), dynamic_scene_(nullptr) {
+	if (!scene_) {LOG(FATAL) << "Scene is NULL. Can not continue";}
+	Initiate();
+}
+
+// Constructor takes in a scene
+Viewer::Viewer(anantak::DynamicScene* s, float scale = 1.) :
+		options_(scale), scene_(nullptr), dynamic_scene_(s) {
+	if (!dynamic_scene_) {LOG(FATAL) << "DynamicScene is NULL. Can not continue";}
 	Initiate();
 }
 
 bool Viewer::Initiate() {
+	// Setup circles
 	float dtheta = float(kPi_2) / float(options_.num_points_on_circle);
 	xy_circle_points_.resize(3, options_.num_points_on_circle);
 	yz_circle_points_.resize(3, options_.num_points_on_circle);
@@ -49,10 +67,66 @@ bool Viewer::Initiate() {
 		zx_circle_points_(1,i) = 0.;
 		zx_circle_points_(2,i) = std::sin(theta);
 	}
+	//// Timer
+	//connect(&viewer_timer_, SIGNAL(timeout()), this, SLOT(updateGL()));
+	//viewer_timer_.start(options_.timer_delay/1000);
 }
 
 // Destructor - all should self destruct
 Viewer::~Viewer() {}
+
+// Update
+//void Viewer::updateGL() {
+//	VLOG(1) << "Update called";
+//	if (dynamic_scene_) {
+//		dynamic_scene_->Update();
+//	}
+//	// Redraw the scene
+//	draw();
+//}
+
+void Viewer::init() {
+	// Set scene
+	setSceneRadius(std::max(options_.scene_width, options_.scene_length));   // scene radius in GL units
+	VLOG(1) << "Scene radius = " << sceneRadius();
+	setSceneCenter(qglviewer::Vec(0,0,0)); 		// scene center is a origin
+	camera()->showEntireScene();
+	
+  // Restore previous viewer state.
+  restoreStateFromFile();
+	
+	// Opens help window
+  //help();
+	
+	// Start animation
+	startAnimation();
+}
+
+void Viewer::animate() {
+	VLOG(3) << "Update called";
+	if (dynamic_scene_) {
+		dynamic_scene_->Update();
+	}
+}
+
+void Viewer::draw() {
+	
+	// Draw the static scene objects
+	if (scene_) {
+		for (auto it=scene_->scene_poses_.begin(); it!=scene_->scene_poses_.end(); it++) {
+			DrawPoseState(*it);
+			DrawVelocityState(*it);
+		}
+	}
+	
+	// Draw the dynamic scene objects
+	if (dynamic_scene_) {
+		DrawCamera(dynamic_scene_->camera_display_);
+		DrawPoseState(dynamic_scene_->target_pose_display_);
+		DrawVelocityState(dynamic_scene_->target_pose_display_);
+	}
+	
+}
 
 // Draws a spiral
 void Viewer::DrawSpiral() {
@@ -126,6 +200,31 @@ bool Viewer::DrawArrow(float length, float radius, int nbSubdivisions) {
 	
 	return true;
 }
+
+bool Viewer::DrawLine(float length = 1.) {
+	glDisable(GL_LIGHTING);  // Disable lights when drawing lines
+	glLineWidth(options_.rotation_axes_line_width);
+	glBegin(GL_LINES);
+	glVertex3f(0.,0.,0.);
+	glVertex3f(length,0.,0.);
+	glEnd();
+	glEnable(GL_LIGHTING);
+}
+
+bool Viewer::DrawTarget(float height = 1., float width = 1., float depth = 0.1) {
+	glDisable(GL_LIGHTING);  // Disable lights when drawing lines
+	glLineWidth(options_.rotation_axes_line_width);
+	glColor4f(1.,1.,0.,1.);
+	glBegin(GL_LINE_LOOP);
+	glVertex3f( width,  height, 0.);
+	glVertex3f( width, -height, 0.);
+	glVertex3f(-width, -height, 0.);
+	glVertex3f(-width,  height, 0.);
+	glEnd();
+	glEnable(GL_LIGHTING);
+}
+
+
 
 // Draw a circle
 bool Viewer::DrawCircleXY() {
@@ -221,6 +320,10 @@ bool Viewer::DrawPoseState(const anantak::PoseStateDisplay& pose) {
 	glVertex3f(0.,0.,0.);
 	glVertex3f(0.,0.,1.);
 	glEnd();
+	
+	// Draw Target
+	DrawTarget(options_.target_height, options_.target_width, options_.target_depth);
+	
 	glPopMatrix();
 	
 	// Draw position ellipsoid
@@ -298,7 +401,8 @@ bool Viewer::DrawVelocityState(const anantak::PoseStateDisplay& pose) {
 					 options_.velocity_arrow_length_ratio);
 	glPushMatrix();	// Draw arrow
 	glMultMatrixd(pose.v_arrow_T_.data());
-	drawArrow(pose.v_norm_, options_.velocity_arrow_radius_ratio, 12);
+	//DrawArrow(pose.v_norm_, options_.velocity_arrow_radius_ratio, 12);
+	DrawLine(pose.v_norm_);
 	glPopMatrix();  // Draw arrow
 	// Draw linear velocity uncertainty circles
 	glPushMatrix();	// Draw circles
@@ -314,14 +418,15 @@ bool Viewer::DrawVelocityState(const anantak::PoseStateDisplay& pose) {
 	glPopMatrix();  // velocity scale
 	
 	// Draw angular velocity
-	glColor4f(.8,.8,.5,1.);
+	glColor4f(1.,1.,0.,1.);
 	glPushMatrix();	// velocity scale
 	glScalef(options_.velocity_arrow_length_ratio,
 					 options_.velocity_arrow_length_ratio,
 					 options_.velocity_arrow_length_ratio);
 	glPushMatrix();	// Draw arrow
 	glMultMatrixd(pose.w_arrow_T_.data());
-	drawArrow(pose.w_norm_, options_.velocity_arrow_radius_ratio, 12);
+	//DrawArrow(pose.w_norm_, options_.velocity_arrow_radius_ratio, 12);
+	DrawLine(pose.w_norm_);
 	glPopMatrix();  // Draw arrow
 	// Draw linear velocity uncertainty circles
 	glPushMatrix();	// Draw circles
@@ -342,28 +447,45 @@ bool Viewer::DrawVelocityState(const anantak::PoseStateDisplay& pose) {
 	return true;
 }
 
-void Viewer::draw() {
+bool Viewer::DrawCamera(const anantak::CameraStateDisplay& camera) {
 	
-	// Draw the scene objects
-	for (auto it=scene_->scene_poses_.begin(); it!=scene_->scene_poses_.end(); it++) {
-		DrawPoseState(*it);
-		DrawVelocityState(*it);
-	}
+	glDisable(GL_LIGHTING);  // Disable lights when drawing lines
+	glLineWidth(options_.rotation_axes_line_width);
 	
-}
-
-void Viewer::init() {
-	// Set scene
-	setSceneRadius(std::max(options_.scene_width, options_.scene_length));   // scene radius in GL units
-	VLOG(1) << "Scene radius = " << sceneRadius();
-	setSceneCenter(qglviewer::Vec(0,0,0)); 		// scene center is a origin
-	camera()->showEntireScene();
+	GLfloat mat[16];
+	for (int i=0; i<16; i++) {mat[i] = float(camera.transform_(i));}
+	// Apply pose transform
+	glPushMatrix();
+	glMultMatrixf(mat);
 	
-  // Restore previous viewer state.
-  restoreStateFromFile();
+	// Draw rotation axes
+	glScalef(options_.meters_per_pixel,
+					 options_.meters_per_pixel,
+					 options_.meters_per_pixel);
+	// Camera
+	glColor4f(1.,0.,1.,1.);
+	glBegin(GL_LINE_LOOP);
+	glVertex3f(camera.vertices_(0,1), camera.vertices_(1,1), camera.vertices_(2,1));
+	glVertex3f(camera.vertices_(0,2), camera.vertices_(1,2), camera.vertices_(2,2));
+	glVertex3f(camera.vertices_(0,3), camera.vertices_(1,3), camera.vertices_(2,3));
+	glVertex3f(camera.vertices_(0,4), camera.vertices_(1,4), camera.vertices_(2,4));
+	glEnd();
+	glBegin(GL_LINES);
+	glVertex3f(camera.vertices_(0,0), camera.vertices_(1,0), camera.vertices_(2,0));
+	glVertex3f(camera.vertices_(0,1), camera.vertices_(1,1), camera.vertices_(2,1));
+	glVertex3f(camera.vertices_(0,0), camera.vertices_(1,0), camera.vertices_(2,0));
+	glVertex3f(camera.vertices_(0,2), camera.vertices_(1,2), camera.vertices_(2,2));
+	glVertex3f(camera.vertices_(0,0), camera.vertices_(1,0), camera.vertices_(2,0));
+	glVertex3f(camera.vertices_(0,3), camera.vertices_(1,3), camera.vertices_(2,3));
+	glVertex3f(camera.vertices_(0,0), camera.vertices_(1,0), camera.vertices_(2,0));
+	glVertex3f(camera.vertices_(0,4), camera.vertices_(1,4), camera.vertices_(2,4));
+	glVertex3f(camera.vertices_(0,0), camera.vertices_(1,0), camera.vertices_(2,0));
+	glVertex3f(camera.vertices_(0,5), camera.vertices_(1,5), camera.vertices_(2,5));
+	glEnd();
 	
-	// Opens help window
-  help();
+	glPopMatrix();
+	glEnable(GL_LIGHTING);
+	
 }
 
 QString Viewer::helpString() const {

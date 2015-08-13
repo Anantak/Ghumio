@@ -41,6 +41,14 @@ class TimedCircularQueue {
       
     TimedQueueElementType(const ElementType& value):
       timestamp(0), element(value) {}
+      
+    TimedQueueElementType(const TimedQueueElementType& r):
+      timestamp(r.timestamp), element(r.element) {}
+    
+    TimedQueueElementType& operator= (const TimedQueueElementType& r) {
+      timestamp = r.timestamp;
+      element = r.element;
+    }
   };
   
   /** Vector of Elements */
@@ -55,7 +63,7 @@ class TimedCircularQueue {
   uint32_t oldest_index_; /**< Oldest element index */
   uint64_t cycle_number_; /**< Cycle number of the circular queue */
 
-  static ElementType empty_element_type_;
+  static ElementType empty_element_type_;   // This is declared at the end of this file
   
   /** Accessors */
   inline bool is_initiated() const {return is_initiated_;}
@@ -194,8 +202,21 @@ class TimedCircularQueue {
     queue_[current_index_].timestamp = ts;
   }
   
+  inline bool SetStartingTimestamp(const int64_t& ts) {
+    if (cycle_number_!=0) {
+      LOG(ERROR) << "Starting timestamp can be set only at starting";
+      return false;
+    }
+    increment();
+    queue_[current_index_].timestamp = ts;
+  }
+  
   inline int64_t LastTimestamp() const {
     return queue_[current_index_].timestamp;
+  }
+  
+  inline int64_t FirstTimestamp() const {
+    return queue_[oldest_index_].timestamp;
   }
   
   /** Set element in the queue by copying the provided one. */
@@ -265,6 +286,34 @@ class TimedCircularQueue {
     return is_initiated_ ? &queue_.at(q_idx).element : NULL;    
   }
 
+  // Nth last element. First last = last. Second last = one before last. and so on.
+  //inline const ElementType* NthLastElementPtr(uint32_t n) {
+  //  if (n_msgs_ < n) return nullptr;
+  //  uint32_t q_idx = QueueIndex(n_msgs_-n);
+  //  return is_initiated_ ? &queue_.at(q_idx).element : nullptr;    
+  //}
+  
+  // Nth last element. First last = last. Second last = one before last. and so on.
+  inline const ElementType& NthLastElement(uint32_t n) const {
+    if (n_msgs_ < n) return empty_element_type_;
+    uint32_t q_idx = QueueIndex(n_msgs_-n);
+    return is_initiated_ ? queue_.at(q_idx).element : empty_element_type_;    
+  }
+  
+  // Nth last element. First last = last. Second last = one before last. and so on.
+  inline ElementType* NthLastElementPtr(uint32_t n) {
+    if (n_msgs_ < n) return nullptr;
+    uint32_t q_idx = QueueIndex(n_msgs_-n);
+    return is_initiated_ ? &queue_.at(q_idx).element : nullptr;    
+  }
+  
+  // Nth last timestamp. First last = last. Second last = one before last. and so on.
+  inline int64_t NthLastTimestamp(uint32_t n) const {
+    if (n_msgs_ < n) return 0;
+    uint32_t q_idx = QueueIndex(n_msgs_-n);
+    return is_initiated_ ? queue_.at(q_idx).timestamp : 0; 
+  }
+  
   // This identifies a fixed point in the queue
   struct FixedPoint {
     uint64_t cycle_number;    /**< Cycle number */
@@ -297,6 +346,16 @@ class TimedCircularQueue {
     return fixed_point;
   }
   
+  inline FixedPoint FirstFixedPoint() const {
+    FixedPoint fixed_point;
+    if (oldest_index_>current_index_) {
+      fixed_point = FixedPoint(cycle_number_-1, oldest_index_);
+    } else {
+      fixed_point = FixedPoint(cycle_number_, oldest_index_);      
+    }
+    return fixed_point;
+  }
+  
   // Check if a fixed point is still valid
   inline bool IsFixedPointValid(const FixedPoint& fixed_point) const {
     return
@@ -323,12 +382,17 @@ class TimedCircularQueue {
     return true;
   }
   
-  // Get a copy of fixed point
+  // Fixed point to string
   inline std::string FixedPointToString(const std::string& fp_name) const {
     if (!FixedPointExists(fp_name)) {
       return fp_name+" does not exist";
     }
     const FixedPoint& fixed_point = fixed_points_.at(fp_name);
+    int64_t ts = queue_.at(fixed_point.element_index).timestamp;
+    return fixed_point.ToString()+", "+std::to_string(ts);
+  }
+  
+  inline std::string FixedPointToString(const FixedPoint& fixed_point) const {
     int64_t ts = queue_.at(fixed_point.element_index).timestamp;
     return fixed_point.ToString()+", "+std::to_string(ts);
   }
@@ -353,6 +417,13 @@ class TimedCircularQueue {
       if (fixed_point.element_index == 0) fixed_point.cycle_number++;
     }
     return fixed_point;
+  }
+  
+  // n = 1 means last element, 2 means second last and so on
+  inline ElementType* NthLastElementPtrBefore(const FixedPoint& fp, uint32_t n) {
+    int32_t offset = -n+1;
+    uint32_t q_idx = PlusOffset(fp.element_index, offset);
+    return is_initiated_ ? &queue_.at(q_idx).element : nullptr;    
   }
   
   // Return a copy of fixed point
@@ -402,9 +473,24 @@ class TimedCircularQueue {
     return ((fp.cycle_number <= ref_fp.cycle_number) && (fp.element_index <= ref_fp.element_index));
   }
 
+  // Are we before a given fixed point?
+  inline bool IsNotAtFixedPoint(const std::string& ref_fp_name, const FixedPoint& fp) const {
+    if (!FixedPointExists(ref_fp_name)) {
+      LOG(ERROR) << ref_fp_name << " fixed point is not in the queue.";
+      return false;
+    }
+    const FixedPoint& ref_fp = fixed_points_.at(ref_fp_name);
+    return ((fp.cycle_number <= ref_fp.cycle_number) && (fp.element_index < ref_fp.element_index));
+  }
+
   // Are we past the end?
   inline bool IsNotPastTheEnd(const FixedPoint& fp) const {
     return ((fp.cycle_number <= cycle_number_) && (fp.element_index <= current_index_));
+  }
+  
+  // Are we past the end?
+  inline bool IsNotAtTheEnd(const FixedPoint& fp) const {
+    return ((fp.cycle_number <= cycle_number_) && (fp.element_index < current_index_));
   }
   
   // Get const element reference at fixed point
@@ -484,51 +570,99 @@ class TimedCircularQueue {
     }
     return &queue_.at(q_idx).element;
   }
-
-  // Position fixed point before timestamp
-  //  return false if timestamp was not found in the queue. Leaves the fixed point unchanged if so
-  inline bool PositionFixedPointBeforeTimestamp(const std::string& fp_name, const int64_t& ts) {
+  
+  inline bool PositionFixedPointBeforeTimestamp(const std::string& fp_name, const int64_t& ts,
+                                                bool ok_to_position_at_end = false,
+                                                bool include_beginning = false) {
     if (!FixedPointExists(fp_name)) {
       LOG(ERROR) << fp_name << " fixed point is not in the queue.";
       return false;
     }
+    return PositionFixedPointBeforeTimestamp(fixed_points_.at(fp_name), ts, ok_to_position_at_end,
+                                             include_beginning);
+  }
+  
+  // Position fixed point before timestamp
+  //  return false if timestamp was not found in the queue. Leaves the fixed point unchanged if so
+  inline bool PositionFixedPointBeforeTimestamp(FixedPoint& fp, const int64_t& ts,
+                                                bool ok_to_position_at_end = false,
+                                                bool include_beginning = false) {
+    // Check if ts is greater than the last ts
+    if (ok_to_position_at_end) {
+      if (include_beginning) {
+        if (LastTimestamp() <= ts) {
+          fp = CurrentFixedPoint();
+          VLOG(3) << "Set the fixed point at the ending.";
+          return true;
+        }
+      } else {
+        if (LastTimestamp() < ts) {
+          fp = CurrentFixedPoint();
+          VLOG(3) << "Set the fixed point at the ending.";
+          return true;
+        }
+      }
+      //else if (ts < FirstTimestamp()) {
+      //  fixed_points_[fp_name] = FirstFixedPoint();
+      //  VLOG(3) << "Set the fixed point at the beginning."
+      //  return true;
+      //}
+    }
     bool interval_found = false;
+    
     // Search in forward direction
-    FixedPoint fp0 = fixed_points_[fp_name];
+    FixedPoint fp0 = fp;
     FixedPoint fp1 = NextFixedPoint(fp0);
     while (!interval_found && IsFixedPointValid(fp1) && Timestamp(fp1)>0) {
-      interval_found = (queue_.at(fp0.element_index).timestamp < ts &&
-                        queue_.at(fp1.element_index).timestamp >= ts);
+      if (include_beginning) {
+        interval_found = (queue_.at(fp0.element_index).timestamp <= ts &&
+                          queue_.at(fp1.element_index).timestamp > ts);
+      } else {
+        interval_found = (queue_.at(fp0.element_index).timestamp < ts &&
+                          queue_.at(fp1.element_index).timestamp >= ts);
+      }
       if (!interval_found) {
         fp0 = fp1;
         fp1 = NextFixedPoint(fp0);
       }
     }
-    //if (interval_found) VLOG(1) << "Found interval in fwd pass"; else VLOG(1) << "Interval not found in fwd pass";
+    if (interval_found) VLOG(3) << "Found interval in fwd pass at "
+        << fp0.ToString() << " " << Timestamp(fp0) << ", "
+        << fp1.ToString() << " " << Timestamp(fp1);
+    
     // If not found, search in backward direction.
     if (!interval_found) {
-      FixedPoint fp1 = fixed_points_[fp_name];
-      FixedPoint fp0 = PrevFixedPoint(fp1);
+      fp1 = fp;
+      fp0 = PrevFixedPoint(fp1);
       while (!interval_found && IsFixedPointValid(fp0) && Timestamp(fp0)>0) {
-        interval_found = (queue_.at(fp0.element_index).timestamp < ts &&
-                          queue_.at(fp1.element_index).timestamp >= ts);
+        if (include_beginning) {
+          interval_found = (queue_.at(fp0.element_index).timestamp <= ts &&
+                            queue_.at(fp1.element_index).timestamp > ts);
+        } else {
+          interval_found = (queue_.at(fp0.element_index).timestamp < ts &&
+                            queue_.at(fp1.element_index).timestamp >= ts);
+        }
         if (!interval_found) {
           fp1 = fp0;
           fp0 = PrevFixedPoint(fp1);
         }
-        //if (interval_found) VLOG(1) << "Found interval at " << queue_.at(fp0.element_index).timestamp << ", "
-        //    << queue_.at(fp1.element_index).timestamp << " at idx " << fp0.element_index << " "
-        //    << fp0.cycle_number << ", " << fp1.element_index << " " << fp1.cycle_number;
+        if (interval_found) VLOG(3) << "Found interval in bkwd pass at "
+            << fp0.ToString() << " " << Timestamp(fp0) << ", "
+            << fp1.ToString() << " " << Timestamp(fp1);
       }
     }
     if (interval_found) {
-      fixed_points_[fp_name] = fp0;
+      fp = fp0;
+      //VLOG(3) << "Fixed point set at " << fp.ToString() << " " << Timestamp(fp);
     }
-    //if (interval_found) VLOG(1) << "Found interval in back pass"; else VLOG(1) << "Interval not found in back pass";
+    //if (interval_found) VLOG(3) << "Found interval in back pass"; else VLOG(3) << "Interval not found in back pass";
     return interval_found;
   }
   
-  
 };
+
+//Static element for timed circular queue
+template <typename ElementType>
+ElementType TimedCircularQueue<ElementType>::empty_element_type_ = ElementType();
 
 } // namespace anantak

@@ -35,6 +35,13 @@ bool ReadProgramsSetup(std::string config_filename, /**< Protobuf text format fi
   return true;
 }
 
+Looper::Looper(int64_t interval) {
+  loop_frequency_ = float(1000000/interval);
+  loop_timeperiod_ = interval;
+  last_touch_time_ = get_wall_time_microsec();
+  max_frequency_ = 0.0;
+  VLOG(2) << "Created a looper at " << loop_timeperiod_/1000 << "ms/" << loop_frequency_ << "Hz";
+}
 Looper::Looper(float freq) {
   loop_frequency_ = freq;
   loop_timeperiod_ = int64_t(float(1000000)/freq);

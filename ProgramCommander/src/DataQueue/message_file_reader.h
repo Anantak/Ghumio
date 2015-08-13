@@ -60,7 +60,8 @@ class MessageFileReader {
   float MessageReadTime();           /**< Average time taken to write one message */
   
   /** Utility function to read all sensor messages from a file **/
-  bool LoadMessagesFromFile(const std::string& filename, std::vector<anantak::SensorMsg>* msgs);
+  bool LoadMessagesFromFile(const std::string& filename, std::vector<anantak::SensorMsg>* msgs,
+                            bool absolute=false);
   
   // Accessors and mutators
   inline bool file_is_open() {return file_is_open_;}    /**< Is the file open? */

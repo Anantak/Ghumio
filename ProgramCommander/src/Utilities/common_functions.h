@@ -9,6 +9,7 @@
 /** std includes */
 #include <string>
 #include <memory>
+#include <sys/time.h>
 
 /** Google Protocol Buffers library */
 #include <fcntl.h>
@@ -41,7 +42,7 @@ inline std::string microsec_to_time_str(int64_t musec) {
   std::lldiv_t hh = std::lldiv( mm.quot, 24 );    // quot=time in days, rem=hours left
   std::string str = std::to_string(hh.rem)+":"+std::to_string(mm.rem)+":"+std::to_string(ss.rem)
       +"."+std::to_string(ms.rem);
-  if (hh.quot > 0) str = std::to_string(hh.quot)+" "+str;
+  if (hh.quot > 0) str = std::to_string(hh.quot)+"'"+str;
   return str;
 }
 
@@ -79,7 +80,8 @@ std::unique_ptr<MsgType> ReadProtobufFile(std::string config_filename) {
 
 class Looper {
  public:
-  Looper(float freq);
+  explicit Looper(int64_t interval);
+  explicit Looper(float freq);
   bool SetInterval(const int64_t& interval, const int64_t& curr_time);
   virtual ~Looper();
   int64_t Sleep();
@@ -92,6 +94,12 @@ class Looper {
   int64_t get_wall_time_microsec();
 };
 
+// Get the wall time from computer
+inline int64_t GetWallTime() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (int64_t) (tv.tv_sec * 1000000 + tv.tv_usec);
+}
 
 
 }   // namespace anantak

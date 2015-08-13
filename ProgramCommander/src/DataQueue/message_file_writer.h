@@ -36,6 +36,9 @@ class MessageFileWriter {
    *  the Write function. Return true on success. */
   bool WriteMessage(std::unique_ptr<google::protobuf::Message> message);
   
+  /** Write multiple messages to file */
+  bool WriteMessages(const std::string filename, const std::vector<google::protobuf::Message>& msgs);
+  
   /** Close the file */
   bool Close();
   

@@ -189,7 +189,7 @@ class SlidingWindowFilter {
   anantak::CircularQueue<int64_t> iterations_tracker_;  /**< circular queue for iteration_ids */
   
   // Observations
-  float max_observation_frequency_;           /**< Max expected frequency of observations */
+  float max_observation_frequency_;                 /**< Max expected frequency of observations */
   anantak::ObservationTypeMap observation_types_;   /**< Keeps specifics of the observation types */
   anantak::ObservationsVectorStoreMapCirPtrQueue observations_tracker_;  /**< Owns observations */
   int32_t num_observations_received_;

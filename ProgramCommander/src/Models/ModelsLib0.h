@@ -884,6 +884,29 @@ class Pose3dState : public State {
     return true;
   }
   
+  // Create from message
+  bool Create(const anantak::PoseStateMessage& msg, const int64_t& ts=0) {
+    timestamp_ = ts;
+    information_ = 0;
+    if (msg.state_size()!=7) {
+      LOG(ERROR) << "Message pose state size != 7. Using default." << msg.state_size();
+      SetZero();
+      return false;
+    }
+    MapVector7dType s(state_);
+    MapConstVector7dType msg_s(msg.state().data());
+    s = msg_s;
+    SetErrorZero();
+    if (msg.covariance_size()!=36) {
+      LOG(ERROR) << "Message pose cov size != 36. Using default." << msg.covariance_size();
+      covariance_.setZero();
+      return false;
+    }
+    MapConstMatrix6dRowType msg_cov(msg.covariance().data());
+    covariance_ = msg_cov;
+    return true;
+  }
+  
   // Set timestamp
   bool SetTimestamp(const int64_t& ts) {
     timestamp_ = ts;
@@ -10437,422 +10460,419 @@ T RobustMeanAngle(const std::vector<T>& _vec, const int method=1, bool ignore_na
  * Loads messages data
  * Set Time based on clock time or data will be returned using time interval
  * Returns new messages in an interval or clock time passed
- */
-class FileMessagesKeeper {
- public:
-  
-  FileMessagesKeeper(const std::vector<std::string>& msgs_filenames, const bool run_in_reatime_mode) {
-    msgs_filenames_ = msgs_filenames;
-    run_in_realtime_mode_ = run_in_reatime_mode;
-  }
-  
-  virtual ~FileMessagesKeeper() {}
-  
-  bool LoadAllMsgsFromFiles() {
-    // Load msgs into sensor_msgs_
-    num_files_ = msgs_filenames_.size();
-    VLOG(1) << "Number of message files = " << num_files_;
-    sensor_msgs_.resize(num_files_);  // all elements are nullptr's
-    for (int i=0; i<num_files_; i++) {
-      std::unique_ptr<std::vector<anantak::SensorMsg>> ptr(new std::vector<anantak::SensorMsg>);
-      sensor_msgs_[i] = std::move(ptr);
-      if (!anantak::LoadMsgsFromFile(msgs_filenames_[i], sensor_msgs_[i].get())) {
-        LOG(ERROR) << "Could not load messages from " << msgs_filenames_[i];
-      }
-    }
-    // Set file_time_curr_time_offset_
-    int64_t min_files_ts = 0;
-    for (int i=0; i<num_files_; i++) {
-      int64_t file_min_ts = 0;
-      const anantak::SensorMsg& msg = sensor_msgs_[i]->front();
-      if (msg.has_header()) {
-        file_min_ts = msg.header().timestamp();
-      }
-      VLOG(1) << "  Starting file " << i << " timestamp = "
-          << anantak::microsec_to_time_str(file_min_ts);
-      if (min_files_ts==0 && file_min_ts!=0) {
-        min_files_ts = file_min_ts;
-      } else {
-        min_files_ts = std::min(file_min_ts, min_files_ts);
-      }
-    }
-    if (min_files_ts==0) {
-      LOG(ERROR) << "Could not calculate minimum files timestamp";
-      return false;
-    } else {
-      VLOG(1) << "Starting files timestamp = " << anantak::microsec_to_time_str(min_files_ts);
-    }
-    curr_time_ = get_wall_time_microsec();
-    last_fetch_time_ = 0;
-    data_starting_ts_ = min_files_ts;
-    file_time_curr_time_offset_ = min_files_ts - curr_time_;
-    VLOG(1) << "file_time_curr_time_offset_ = "
-        << anantak::microsec_to_time_str(-file_time_curr_time_offset_);
-    // Set msgs_indexes_ to beginning
-    msgs_indexes_.resize(num_files_, int32_t(0));
-    return true;
-  }
-  
-  // Any more data left?
-  bool MoreDataLeft() {
-    bool data_left = false;
-    for (int i_file=0; i_file<num_files_; i_file++)
-        data_left |= (msgs_indexes_[i_file] < sensor_msgs_[i_file]->size());
-    return data_left;
-  }
-  
-  // Utility to allocate memory for data fetch. Assumes all pointers in array are NULL
-  bool AllocateMemoryForNewMessages(const int32_t& num_msgs_per_file,
-      std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs
-  ) {
-    new_msgs->resize(num_files_);
-    for (int i=0; i<num_files_; i++) {
-      std::unique_ptr<std::vector<anantak::SensorMsg>> ptr(new std::vector<anantak::SensorMsg>);
-      (*new_msgs)[i] = std::move(ptr);
-      (*new_msgs)[i]->reserve(num_msgs_per_file);
-    }
-  }
-  
-  // Fetch messages between given historical timestamps
-  bool FetchMessagesBetweenTimestamps(const int64_t& ts0, const int64_t& ts1,
-      std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs) {
-    // Read forward from msgs_indexes_ from each file, fetching messages in the time interval
-    // new_msgs should have correct size. If not, return false
-    if (new_msgs->size()!=num_files_) {
-      LOG(ERROR) << "new_msgs->size()!=num_files_ " << new_msgs->size() << " " << num_files_;
-      return false;
-    }
-    // Clear messages in copy buffer
-    for (int i_file=0; i_file<num_files_; i_file++) {
-      new_msgs->at(i_file)->clear();
-    }
-    // For each file move forward from current message, check timestamp. Copy message.
-    for (int i_file=0; i_file<num_files_; i_file++) {
-      bool exceeded_ts1 = false;
-      while (!exceeded_ts1 && msgs_indexes_[i_file] < sensor_msgs_[i_file]->size()) {
-        const anantak::SensorMsg& msg = sensor_msgs_[i_file]->at(msgs_indexes_[i_file]);
-        exceeded_ts1 = (msg.header().timestamp()>ts1);
-        if (msg.header().timestamp()>ts0 && msg.header().timestamp()<=ts1) {
-          (*new_msgs)[i_file]->push_back(msg);  // copy message
-        }
-        if (!exceeded_ts1) msgs_indexes_[i_file]++;
-      } // while !done
-    } // for each file
-    
-    return true;
-  }
-
-  // Fetch last messages
-  bool FetchLastMessages(std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs) {
-    for (int i_file=0; i_file<num_files_; i_file++) {
-      new_msgs->at(i_file)->clear();
-      const anantak::SensorMsg& msg = sensor_msgs_[i_file]->back();
-      (*new_msgs)[i_file]->push_back(msg);  // copy message
-    }
-    return true;
-  }
-  
-  // Fetch new messages since last time data was fetched
-  //  realtime mode - messages are returned since min(last_fetch_time_, curr_time_-interval)
-  //  batch mode - message are returned in curr_time_+interval. curr_time_ is updated.
-  bool FetchNewMessages(const int64_t& interval,
-      std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs) {
-    //int32_t num_msgs = 0;
-    int64_t ts0, ts1;
-    if (run_in_realtime_mode_) {
-      curr_time_ = get_wall_time_microsec();
-      int64_t fetch_interval = std::min(interval, curr_time_ - last_fetch_time_);
-      last_fetch_time_ = curr_time_;
-      ts1 = curr_time_;
-      ts0 = curr_time_ - fetch_interval;
-    } else {
-      curr_time_ = curr_time_ + interval;
-      ts1 = curr_time_;
-      ts0 = last_fetch_time_;
-      last_fetch_time_ = curr_time_;
-    }
-    // Convert current timestamps to historical file timestamps
-    ts0 += file_time_curr_time_offset_;
-    ts1 += file_time_curr_time_offset_;
-    return FetchMessagesBetweenTimestamps(ts0, ts1, new_msgs);
-  }
-  
-  inline int64_t get_wall_time_microsec() {
-    struct timeval tv;
-    gettimeofday (&tv, NULL);
-    return (int64_t) (tv.tv_sec * 1000000 + tv.tv_usec);  
-  }
-  
-  int64_t CurrentTime() {return curr_time_;}
-  int64_t CurrentDataTime() {return curr_time_+file_time_curr_time_offset_;}
-  int64_t DataStartTime() {return data_starting_ts_;}
-  
-  // Data variables
-  std::vector<std::string> msgs_filenames_;
-  std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>> sensor_msgs_;
-  int32_t num_files_;
-  bool run_in_realtime_mode_;
-  int64_t file_time_curr_time_offset_; //
-  int64_t data_starting_ts_;  // timestamp of starting of data
-  int64_t curr_time_; // Current time
-  int64_t last_fetch_time_; // last timestamp when data was fetched
-  std::vector<int32_t> msgs_indexes_; // current indexes of each messages vector
-};  // FileMessagesKeeper
-
+//class FileMessagesKeeper {
+// public:
+//  
+//  FileMessagesKeeper(const std::vector<std::string>& msgs_filenames, const bool run_in_reatime_mode) {
+//    msgs_filenames_ = msgs_filenames;
+//    run_in_realtime_mode_ = run_in_reatime_mode;
+//  }
+//  
+//  virtual ~FileMessagesKeeper() {}
+//  
+//  bool LoadAllMsgsFromFiles() {
+//    // Load msgs into sensor_msgs_
+//    num_files_ = msgs_filenames_.size();
+//    VLOG(1) << "Number of message files = " << num_files_;
+//    sensor_msgs_.resize(num_files_);  // all elements are nullptr's
+//    for (int i=0; i<num_files_; i++) {
+//      std::unique_ptr<std::vector<anantak::SensorMsg>> ptr(new std::vector<anantak::SensorMsg>);
+//      sensor_msgs_[i] = std::move(ptr);
+//      if (!anantak::LoadMsgsFromFile(msgs_filenames_[i], sensor_msgs_[i].get())) {
+//        LOG(ERROR) << "Could not load messages from " << msgs_filenames_[i];
+//      }
+//    }
+//    // Set file_time_curr_time_offset_
+//    int64_t min_files_ts = 0;
+//    for (int i=0; i<num_files_; i++) {
+//      int64_t file_min_ts = 0;
+//      const anantak::SensorMsg& msg = sensor_msgs_[i]->front();
+//      if (msg.has_header()) {
+//        file_min_ts = msg.header().timestamp();
+//      }
+//      VLOG(1) << "  Starting file " << i << " timestamp = "
+//          << anantak::microsec_to_time_str(file_min_ts);
+//      if (min_files_ts==0 && file_min_ts!=0) {
+//        min_files_ts = file_min_ts;
+//      } else {
+//        min_files_ts = std::min(file_min_ts, min_files_ts);
+//      }
+//    }
+//    if (min_files_ts==0) {
+//      LOG(ERROR) << "Could not calculate minimum files timestamp";
+//      return false;
+//    } else {
+//      VLOG(1) << "Starting files timestamp = " << anantak::microsec_to_time_str(min_files_ts);
+//    }
+//    curr_time_ = get_wall_time_microsec();
+//    last_fetch_time_ = 0;
+//    data_starting_ts_ = min_files_ts;
+//    file_time_curr_time_offset_ = min_files_ts - curr_time_;
+//    VLOG(1) << "file_time_curr_time_offset_ = "
+//        << anantak::microsec_to_time_str(-file_time_curr_time_offset_);
+//    // Set msgs_indexes_ to beginning
+//    msgs_indexes_.resize(num_files_, int32_t(0));
+//    return true;
+//  }
+//  
+//  // Any more data left?
+//  bool MoreDataLeft() {
+//    bool data_left = false;
+//    for (int i_file=0; i_file<num_files_; i_file++)
+//        data_left |= (msgs_indexes_[i_file] < sensor_msgs_[i_file]->size());
+//    return data_left;
+//  }
+//  
+//  // Utility to allocate memory for data fetch. Assumes all pointers in array are NULL
+//  bool AllocateMemoryForNewMessages(const int32_t& num_msgs_per_file,
+//      std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs
+//  ) {
+//    new_msgs->resize(num_files_);
+//    for (int i=0; i<num_files_; i++) {
+//      std::unique_ptr<std::vector<anantak::SensorMsg>> ptr(new std::vector<anantak::SensorMsg>);
+//      (*new_msgs)[i] = std::move(ptr);
+//      (*new_msgs)[i]->reserve(num_msgs_per_file);
+//    }
+//  }
+//  
+//  // Fetch messages between given historical timestamps
+//  bool FetchMessagesBetweenTimestamps(const int64_t& ts0, const int64_t& ts1,
+//      std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs) {
+//    // Read forward from msgs_indexes_ from each file, fetching messages in the time interval
+//    // new_msgs should have correct size. If not, return false
+//    if (new_msgs->size()!=num_files_) {
+//      LOG(ERROR) << "new_msgs->size()!=num_files_ " << new_msgs->size() << " " << num_files_;
+//      return false;
+//    }
+//    // Clear messages in copy buffer
+//    for (int i_file=0; i_file<num_files_; i_file++) {
+//      new_msgs->at(i_file)->clear();
+//    }
+//    // For each file move forward from current message, check timestamp. Copy message.
+//    for (int i_file=0; i_file<num_files_; i_file++) {
+//      bool exceeded_ts1 = false;
+//      while (!exceeded_ts1 && msgs_indexes_[i_file] < sensor_msgs_[i_file]->size()) {
+//        const anantak::SensorMsg& msg = sensor_msgs_[i_file]->at(msgs_indexes_[i_file]);
+//        exceeded_ts1 = (msg.header().timestamp()>ts1);
+//        if (msg.header().timestamp()>ts0 && msg.header().timestamp()<=ts1) {
+//          (*new_msgs)[i_file]->push_back(msg);  // copy message
+//        }
+//        if (!exceeded_ts1) msgs_indexes_[i_file]++;
+//      } // while !done
+//    } // for each file
+//    
+//    return true;
+//  }
+//
+//  // Fetch last messages
+//  bool FetchLastMessages(std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs) {
+//    for (int i_file=0; i_file<num_files_; i_file++) {
+//      new_msgs->at(i_file)->clear();
+//      const anantak::SensorMsg& msg = sensor_msgs_[i_file]->back();
+//      (*new_msgs)[i_file]->push_back(msg);  // copy message
+//    }
+//    return true;
+//  }
+//  
+//  // Fetch new messages since last time data was fetched
+//  //  realtime mode - messages are returned since min(last_fetch_time_, curr_time_-interval)
+//  //  batch mode - message are returned in curr_time_+interval. curr_time_ is updated.
+//  bool FetchNewMessages(const int64_t& interval,
+//      std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>* new_msgs) {
+//    //int32_t num_msgs = 0;
+//    int64_t ts0, ts1;
+//    if (run_in_realtime_mode_) {
+//      curr_time_ = get_wall_time_microsec();
+//      int64_t fetch_interval = std::min(interval, curr_time_ - last_fetch_time_);
+//      last_fetch_time_ = curr_time_;
+//      ts1 = curr_time_;
+//      ts0 = curr_time_ - fetch_interval;
+//    } else {
+//      curr_time_ = curr_time_ + interval;
+//      ts1 = curr_time_;
+//      ts0 = last_fetch_time_;
+//      last_fetch_time_ = curr_time_;
+//    }
+//    // Convert current timestamps to historical file timestamps
+//    ts0 += file_time_curr_time_offset_;
+//    ts1 += file_time_curr_time_offset_;
+//    return FetchMessagesBetweenTimestamps(ts0, ts1, new_msgs);
+//  }
+//  
+//  inline int64_t get_wall_time_microsec() {
+//    struct timeval tv;
+//    gettimeofday (&tv, NULL);
+//    return (int64_t) (tv.tv_sec * 1000000 + tv.tv_usec);  
+//  }
+//  
+//  int64_t CurrentTime() {return curr_time_;}
+//  int64_t CurrentDataTime() {return curr_time_+file_time_curr_time_offset_;}
+//  int64_t DataStartTime() {return data_starting_ts_;}
+//  
+//  // Data variables
+//  std::vector<std::string> msgs_filenames_;
+//  std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>> sensor_msgs_;
+//  int32_t num_files_;
+//  bool run_in_realtime_mode_;
+//  int64_t file_time_curr_time_offset_; //
+//  int64_t data_starting_ts_;  // timestamp of starting of data
+//  int64_t curr_time_; // Current time
+//  int64_t last_fetch_time_; // last timestamp when data was fetched
+//  std::vector<int32_t> msgs_indexes_; // current indexes of each messages vector
+//};  // FileMessagesKeeper*/
 
 /* Sliding Window Iterations
  * Implements functions to help run the sliding window filter
- */
-class SlidingWindowFilterIterations {
- public:
-  
-  struct Options {
-    uint64_t longest_problem_interval;    // Problem will be built to this longest length
-    uint64_t shortest_problem_interval;   // Problem will be built to this length at a minimum
-    uint64_t sliding_window_interval;     // This is the length of time in which states will be solved
-    uint64_t solving_problem_interval;    // Problem will be solved after every this interval
-    
-    Options() :
-      longest_problem_interval(10000000),
-      shortest_problem_interval(3000000),
-      sliding_window_interval(2000000),
-      solving_problem_interval(1000000)
-    {Check();}
-    
-    Options(uint64_t lpi, uint64_t spi, uint64_t swi, uint64_t vpi) :
-      longest_problem_interval(lpi),
-      shortest_problem_interval(spi),
-      sliding_window_interval(swi),
-      solving_problem_interval(vpi)
-    {Check();}
-    
-    Options(const SlidingWindowOptionsConfig& config):
-      longest_problem_interval(config.longest_problem_interval()),
-      shortest_problem_interval(config.shortest_problem_interval()),
-      sliding_window_interval(config.sliding_window_interval()),
-      solving_problem_interval(config.solving_problem_interval())
-    {Check();}    
-    
-    bool Check() {
-      if (longest_problem_interval < shortest_problem_interval)
-        LOG(ERROR) << "longest_problem_interval < shortest_problem_interval! "
-          << longest_problem_interval << " " << shortest_problem_interval;
-      if (shortest_problem_interval < sliding_window_interval)
-        LOG(ERROR) << "shortest_problem_interval < sliding_window_interval! "
-          << shortest_problem_interval << " " <<  sliding_window_interval;
-    }  // Check
-    
-    std::string ToString() {
-      return "Longest: "+std::to_string(longest_problem_interval)+" Shortest: "+std::to_string(shortest_problem_interval)+
-          " Sliding: "+std::to_string(sliding_window_interval)+" Solving: "+std::to_string(solving_problem_interval);
-    }
-  }; // Options
-  
-  SlidingWindowFilterIterations::Options options_;
-  
-  int64_t start_ts_;            // Algorithm begins at this ts
-  int64_t data_begin_ts_;       // Data in the problem begins at this ts
-  int64_t solve_begin_ts_;      // Solving of the 
-  int64_t data_end_ts_;
-  int64_t sliding_window_ts_;   // ts where we begin solving data
-  
-  bool reset_problem_;
-  bool solve_problem_;
-  
-  SlidingWindowFilterIterations():
-    options_(), start_ts_(0),
-    data_begin_ts_(0), solve_begin_ts_(0), data_end_ts_(0), sliding_window_ts_(0),
-    reset_problem_(false), solve_problem_(false)
-    {Check();}
-  
-  SlidingWindowFilterIterations(const SlidingWindowFilterIterations::Options& op):
-    options_(op), start_ts_(0),
-    data_begin_ts_(0), solve_begin_ts_(0), data_end_ts_(0), sliding_window_ts_(0),
-    reset_problem_(false), solve_problem_(false)
-    {Check();}
-  
-  bool Check() {
-    if (options_.solving_problem_interval >= options_.sliding_window_interval) {
-      LOG(WARNING) << "solving_problem_interval >= sliding_window_interval. "
-          << options_.solving_problem_interval << " " << options_.sliding_window_interval;
-      LOG(WARNING) << "Usually we expect solving_problem_interval < sliding_window_interval";
-      return false;
-    }
-    return true;
-  }
-  
-  // Starting of the filter timestamp
-  bool StartFiltering(const int64_t& start_ts) {
-    start_ts_ = start_ts;
-    data_begin_ts_ = start_ts;
-    solve_begin_ts_ = start_ts;
-    data_end_ts_ = start_ts;
-    sliding_window_ts_ = start_ts;
-    reset_problem_ = true;
-  }
-  
-  // Regular updates to the data, with ending data timestamp provided
-  bool AddData(const int64_t& data_ts) {
-    
-    // Check if new data end ts makes sense
-    if (data_ts < data_end_ts_) {
-      LOG(ERROR) << "Recieved data end ts < last end ts. Not expected. "
-          << data_ts << " " << data_end_ts_;
-      return false;
-    }
-    data_end_ts_ = data_ts;
-    
-    // Sliding window to solve begins before data end ts
-    sliding_window_ts_ = data_end_ts_ - options_.sliding_window_interval;
-    if (sliding_window_ts_ < start_ts_) sliding_window_ts_ = start_ts_;
-    
-    // Is it time to reset the problem?
-    reset_problem_ = (data_end_ts_ >= data_begin_ts_ + options_.longest_problem_interval);
-    
-    if (reset_problem_) {
-      // Move forward
-      data_begin_ts_ = data_end_ts_ - options_.shortest_problem_interval;
-      if (data_begin_ts_ < start_ts_) data_begin_ts_ = start_ts_;
-      // Check solve begin ts
-      if (solve_begin_ts_ < data_begin_ts_) {
-        LOG(WARNING) << "Data solve ts fell before data begin. Has the problem not been solved for a while?"
-            << " solve_begin_ts_ was " << data_begin_ts_ - solve_begin_ts_ << " musecs before data_begin_ts_";
-        solve_begin_ts_ = data_begin_ts_;
-      }
-    } else {
-      // Data begin ts and solve begin ts both remain at the same place
-    }
-    
-    // Is it time to solve the problem?
-    solve_problem_ = (data_end_ts_ >= solve_begin_ts_ + options_.solving_problem_interval);
-    
-    return true;
-  }
-  
-  const int64_t& DataBeginTimestamp() const {return data_begin_ts_;}
-  const int64_t& SlidingWindowTimestamp() const {return sliding_window_ts_;}
-  bool IsItTimeToResetProblem() const {return reset_problem_;}
-  bool IsItTimeToSolveProblem() const {return solve_problem_;}
-  
-  // Solve problem update to data. Gets the ts of the last data point when problem is solved
-  bool SolveProblem() {
-    // Problem was solved, so update solve ts
-    solve_begin_ts_ = data_end_ts_;
-    return true;
-  }
-  
-};  // SlidingWindowFilterIterations
+//class SlidingWindowFilterIterations {
+// public:
+//  
+//  struct Options {
+//    uint64_t longest_problem_interval;    // Problem will be built to this longest length
+//    uint64_t shortest_problem_interval;   // Problem will be built to this length at a minimum
+//    uint64_t sliding_window_interval;     // This is the length of time in which states will be solved
+//    uint64_t solving_problem_interval;    // Problem will be solved after every this interval
+//    
+//    Options() :
+//      longest_problem_interval(10000000),
+//      shortest_problem_interval(3000000),
+//      sliding_window_interval(2000000),
+//      solving_problem_interval(1000000)
+//    {Check();}
+//    
+//    Options(uint64_t lpi, uint64_t spi, uint64_t swi, uint64_t vpi) :
+//      longest_problem_interval(lpi),
+//      shortest_problem_interval(spi),
+//      sliding_window_interval(swi),
+//      solving_problem_interval(vpi)
+//    {Check();}
+//    
+//    Options(const SlidingWindowOptionsConfig& config):
+//      longest_problem_interval(config.longest_problem_interval()),
+//      shortest_problem_interval(config.shortest_problem_interval()),
+//      sliding_window_interval(config.sliding_window_interval()),
+//      solving_problem_interval(config.solving_problem_interval())
+//    {Check();}    
+//    
+//    bool Check() {
+//      if (longest_problem_interval < shortest_problem_interval)
+//        LOG(ERROR) << "longest_problem_interval < shortest_problem_interval! "
+//          << longest_problem_interval << " " << shortest_problem_interval;
+//      if (shortest_problem_interval < sliding_window_interval)
+//        LOG(ERROR) << "shortest_problem_interval < sliding_window_interval! "
+//          << shortest_problem_interval << " " <<  sliding_window_interval;
+//    }  // Check
+//    
+//    std::string ToString() {
+//      return "Longest: "+std::to_string(longest_problem_interval)+" Shortest: "+std::to_string(shortest_problem_interval)+
+//          " Sliding: "+std::to_string(sliding_window_interval)+" Solving: "+std::to_string(solving_problem_interval);
+//    }
+//  }; // Options
+//  
+//  SlidingWindowFilterIterations::Options options_;
+//  
+//  int64_t start_ts_;            // Algorithm begins at this ts
+//  int64_t data_begin_ts_;       // Data in the problem begins at this ts
+//  int64_t solve_begin_ts_;      // Solving of the 
+//  int64_t data_end_ts_;
+//  int64_t sliding_window_ts_;   // ts where we begin solving data
+//  
+//  bool reset_problem_;
+//  bool solve_problem_;
+//  
+//  SlidingWindowFilterIterations():
+//    options_(), start_ts_(0),
+//    data_begin_ts_(0), solve_begin_ts_(0), data_end_ts_(0), sliding_window_ts_(0),
+//    reset_problem_(false), solve_problem_(false)
+//    {Check();}
+//  
+//  SlidingWindowFilterIterations(const SlidingWindowFilterIterations::Options& op):
+//    options_(op), start_ts_(0),
+//    data_begin_ts_(0), solve_begin_ts_(0), data_end_ts_(0), sliding_window_ts_(0),
+//    reset_problem_(false), solve_problem_(false)
+//    {Check();}
+//  
+//  bool Check() {
+//    if (options_.solving_problem_interval >= options_.sliding_window_interval) {
+//      LOG(WARNING) << "solving_problem_interval >= sliding_window_interval. "
+//          << options_.solving_problem_interval << " " << options_.sliding_window_interval;
+//      LOG(WARNING) << "Usually we expect solving_problem_interval < sliding_window_interval";
+//      return false;
+//    }
+//    return true;
+//  }
+//  
+//  // Starting of the filter timestamp
+//  bool StartFiltering(const int64_t& start_ts) {
+//    start_ts_ = start_ts;
+//    data_begin_ts_ = start_ts;
+//    solve_begin_ts_ = start_ts;
+//    data_end_ts_ = start_ts;
+//    sliding_window_ts_ = start_ts;
+//    reset_problem_ = true;
+//  }
+//  
+//  // Regular updates to the data, with ending data timestamp provided
+//  bool AddData(const int64_t& data_ts) {
+//    
+//    // Check if new data end ts makes sense
+//    if (data_ts < data_end_ts_) {
+//      LOG(ERROR) << "Recieved data end ts < last end ts. Not expected. "
+//          << data_ts << " " << data_end_ts_;
+//      return false;
+//    }
+//    data_end_ts_ = data_ts;
+//    
+//    // Sliding window to solve begins before data end ts
+//    sliding_window_ts_ = data_end_ts_ - options_.sliding_window_interval;
+//    if (sliding_window_ts_ < start_ts_) sliding_window_ts_ = start_ts_;
+//    
+//    // Is it time to reset the problem?
+//    reset_problem_ = (data_end_ts_ >= data_begin_ts_ + options_.longest_problem_interval);
+//    
+//    if (reset_problem_) {
+//      // Move forward
+//      data_begin_ts_ = data_end_ts_ - options_.shortest_problem_interval;
+//      if (data_begin_ts_ < start_ts_) data_begin_ts_ = start_ts_;
+//      // Check solve begin ts
+//      if (solve_begin_ts_ < data_begin_ts_) {
+//        LOG(WARNING) << "Data solve ts fell before data begin. Has the problem not been solved for a while?"
+//            << " solve_begin_ts_ was " << data_begin_ts_ - solve_begin_ts_ << " musecs before data_begin_ts_";
+//        solve_begin_ts_ = data_begin_ts_;
+//      }
+//    } else {
+//      // Data begin ts and solve begin ts both remain at the same place
+//    }
+//    
+//    // Is it time to solve the problem?
+//    solve_problem_ = (data_end_ts_ >= solve_begin_ts_ + options_.solving_problem_interval);
+//    
+//    return true;
+//  }
+//  
+//  const int64_t& DataBeginTimestamp() const {return data_begin_ts_;}
+//  const int64_t& SlidingWindowTimestamp() const {return sliding_window_ts_;}
+//  bool IsItTimeToResetProblem() const {return reset_problem_;}
+//  bool IsItTimeToSolveProblem() const {return solve_problem_;}
+//  
+//  // Solve problem update to data. Gets the ts of the last data point when problem is solved
+//  bool SolveProblem() {
+//    // Problem was solved, so update solve ts
+//    solve_begin_ts_ = data_end_ts_;
+//    return true;
+//  }
+//  
+//};  // SlidingWindowFilterIterations */
 
-/* IterationRecord - keeps track of iterations */
-struct IterationRecord {
-  uint64_t iteration_number;  // Iterations counter
-  int64_t begin_ts;           // Beginning timestamp
-  int64_t end_ts;             // Ending timestamp
-  
-  // Counters of the iteration
-  std::map<std::string, uint32_t> iteration_counters;
-  std::map<std::string, uint64_t> algorithm_counters;
-  
-  IterationRecord():
-    iteration_number(0),
-    begin_ts(0), end_ts(0)
-  {}
-  
-  IterationRecord(const int64_t& ts):
-    iteration_number(0),
-    begin_ts(ts), end_ts(ts)
-  {}
-  
-  bool Reset(const int64_t& ts) {
-    iteration_number = 0;
-    begin_ts = ts;
-    end_ts = ts;
-    return true;
-  }
-  
-  bool Increment(const int64_t& new_ts) {
-    if (new_ts <= end_ts) {
-      LOG(ERROR) << "Can not increment iteration as new_ts <= end_ts "
-          << new_ts << " <= " << end_ts;
-      return false;
-    }
-    iteration_number++;
-    begin_ts = end_ts;
-    end_ts = new_ts;
-    return true;
-  }
-  
-  bool ResetIterationCounters() {
-    for (auto &pair : iteration_counters) {
-      pair.second = 0;
-    }
-    return true;
-  }
-  
-  std::string IterationCountersToString() const {
-    std::string str = std::to_string(iteration_number) + ", ";
-    for (const auto &pair : iteration_counters) {
-      str += (pair.first + " " + std::to_string(pair.second) + ", ");
-    }
-    return str;
-  }
-  
-  std::string AlgorithmCountersToString() const {
-    std::string str = std::to_string(iteration_number) + ", ";
-    for (const auto &pair : algorithm_counters) {
-      str += (pair.first + " " + std::to_string(pair.second) + ", ");
-    }
-    return str;
-  }
-  
-}; // IterationRecord
+/* IterationRecord - keeps track of iterations
+//struct IterationRecord {
+//  uint64_t iteration_number;  // Iterations counter
+//  int64_t begin_ts;           // Beginning timestamp
+//  int64_t end_ts;             // Ending timestamp
+//  
+//  // Counters of the iteration
+//  std::map<std::string, uint32_t> iteration_counters;
+//  std::map<std::string, uint64_t> algorithm_counters;
+//  
+//  IterationRecord():
+//    iteration_number(0),
+//    begin_ts(0), end_ts(0)
+//  {}
+//  
+//  IterationRecord(const int64_t& ts):
+//    iteration_number(0),
+//    begin_ts(ts), end_ts(ts)
+//  {}
+//  
+//  bool Reset(const int64_t& ts) {
+//    iteration_number = 0;
+//    begin_ts = ts;
+//    end_ts = ts;
+//    return true;
+//  }
+//  
+//  bool Increment(const int64_t& new_ts) {
+//    if (new_ts <= end_ts) {
+//      LOG(ERROR) << "Can not increment iteration as new_ts <= end_ts "
+//          << new_ts << " <= " << end_ts;
+//      return false;
+//    }
+//    iteration_number++;
+//    begin_ts = end_ts;
+//    end_ts = new_ts;
+//    return true;
+//  }
+//  
+//  bool ResetIterationCounters() {
+//    for (auto &pair : iteration_counters) {
+//      pair.second = 0;
+//    }
+//    return true;
+//  }
+//  
+//  std::string IterationCountersToString() const {
+//    std::string str = std::to_string(iteration_number) + ", ";
+//    for (const auto &pair : iteration_counters) {
+//      str += (pair.first + " " + std::to_string(pair.second) + ", ");
+//    }
+//    return str;
+//  }
+//  
+//  std::string AlgorithmCountersToString() const {
+//    std::string str = std::to_string(iteration_number) + ", ";
+//    for (const auto &pair : algorithm_counters) {
+//      str += (pair.first + " " + std::to_string(pair.second) + ", ");
+//    }
+//    return str;
+//  }
+//  
+//}; // IterationRecord */
 
-
-class Model {
- public:
-  /** Constructor - gets a config file */
-  Model() {}
-  
-  /** Destructor - This should never be called - derived class destructor should be called */
-  virtual ~Model() {}
-  
-  // Iteration interval
-  virtual const int64_t& IterationInterval() = 0;
-  
-  // Run iteration with observations
-  virtual bool RunIteration(
-      const int64_t& iteration_end_ts,
-      const anantak::ObservationsVectorStoreMap& observations_map) {}
-  
-  // Run iteration without any observations
-  virtual bool RunIteration(
-      const int64_t& iteration_end_ts) {}
-  
-  // Start a new iteration
-  //virtual bool StartIteration(const int64_t& iteration_end_ts) {}
-  
-  // Create new states for an iteration
-  //virtual bool CreateIterationStates(const int64_t& iteration_end_ts) {}
-  
-  // Process the observations
-  //virtual bool CreateIterationResiduals(const anantak::ObservationsVectorStoreMap& observations_map) {}
-  
-  // Run filtering for the iteration
-  //virtual bool RunFiltering(const int64_t& iteration_end_ts) = 0;
-  
-  // Are the results ready to be published? e.g. did the results change? 
-  virtual bool AreResultsReady() const {}
-  
-  // Get results in form of a message
-  virtual inline const anantak::MessageType& GetResultsMessage() {}
-  
-  // Show results
-  virtual bool Show() {}
-  
-  // Hide results
-  virtual bool Hide() {}
-  
-};
+/* Model class
+//class Model {
+// public:
+//  // Constructor - gets a config file 
+//  Model() {}
+//  
+//  // Destructor - This should never be called - derived class destructor should be called 
+//  virtual ~Model() {}
+//  
+//  // Iteration interval
+//  virtual const int64_t& IterationInterval() = 0;
+//  
+//  // Run iteration with observations
+//  virtual bool RunIteration(
+//      const int64_t& iteration_end_ts,
+//      const anantak::ObservationsVectorStoreMap& observations_map) {}
+//  
+//  // Run iteration without any observations
+//  virtual bool RunIteration(
+//      const int64_t& iteration_end_ts) {}
+//  
+//  // Start a new iteration
+//  //virtual bool StartIteration(const int64_t& iteration_end_ts) {}
+//  
+//  // Create new states for an iteration
+//  //virtual bool CreateIterationStates(const int64_t& iteration_end_ts) {}
+//  
+//  // Process the observations
+//  //virtual bool CreateIterationResiduals(const anantak::ObservationsVectorStoreMap& observations_map) {}
+//  
+//  // Run filtering for the iteration
+//  //virtual bool RunFiltering(const int64_t& iteration_end_ts) = 0;
+//  
+//  // Are the results ready to be published? e.g. did the results change? 
+//  virtual bool AreResultsReady() const {}
+//  
+//  // Get results in form of a message
+//  virtual inline const anantak::MessageType& GetResultsMessage() {}
+//  
+//  // Show results
+//  virtual bool Show() {}
+//  
+//  // Hide results
+//  virtual bool Hide() {}
+//  
+//};  // Model*/
 
 typedef std::function<bool(const anantak::SensorMsg&)> SensorMessageFilterType;
 

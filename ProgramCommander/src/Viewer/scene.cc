@@ -1,4 +1,4 @@
-/** Scene implementation
+/** Dynamic Scene implementation
  */
 
 #include "Viewer/scene.h"
@@ -9,9 +9,17 @@
 
 namespace anantak {
 
-Scene::Scene() {}
+// Scene properties
+//Scene::Scene::Properties():
+//  scene_radius(1.)
+//{}
+
+Scene::Scene():
+    properties_()
+{}
 
 Scene::~Scene() {}
+
 
 bool Scene::LoadPosesFromFile(const std::string& filename) {
   std::vector<anantak::SensorMsg> msgs;
@@ -20,7 +28,7 @@ bool Scene::LoadPosesFromFile(const std::string& filename) {
     LOG(ERROR) << "Could not load messages from file " << filename;
     return false;
   }
-  // Convert messages to kinematic states
+  // Add kinematic states
   for (int i=0; i<msgs.size(); i++) {
     anantak::KinematicState kin;
     if (kin.Create(msgs[i])) {
@@ -28,6 +36,28 @@ bool Scene::LoadPosesFromFile(const std::string& filename) {
       scene_poses_.back().SetPose(kin);
     }
   }
+  // Add pose states
+  for (int i=0; i<msgs.size(); i++) {
+    anantak::PoseState pose;
+    if (pose.Create(msgs[i])) {
+      scene_poses_.emplace_back();
+      scene_poses_.back().SetPose(pose);
+    }
+  }
+  
+  // Calculate scene radius from loaded poses
+  CalculateSceneRadius();
+  
+  return true;
+}
+
+bool Scene::CalculateSceneRadius() {
+  float max_radius = 0.;
+  for (int i=0; i<scene_poses_.size(); i++) {
+    float radius = scene_poses_[i].p_.norm(); //VLOG(1) << "radius = " << radius;
+    max_radius = std::max(max_radius, radius);
+  }
+  properties_.scene_radius = max_radius;
   return true;
 }
 

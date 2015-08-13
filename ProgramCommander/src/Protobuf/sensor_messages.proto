@@ -33,6 +33,8 @@ message SensorMsg {
   optional KinematicStateMessage kinematic_state_msg = 101;
   optional Pose3dStateMessage pose3d_state_msg = 102;
   optional CameraIntrinsicsStateMessage camera_intrinsics_state_msg = 103;
+  optional PoseStateMessage pose_state_msg = 104;
+  optional CameraStateMessage camera_state_msg = 105;
   
 }
 

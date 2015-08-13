@@ -45,7 +45,31 @@ message MessageFilesPublisherConfig {
   repeated Sensor sensor = 30;
 }
 
-/** Sliding Window Filter configuration
+/** Component config
+ *  Common configuration settings for any component
+ */
+message ComponentConfig {
+  required string name = 1;               // name of this configuration of component
+  required string publisher_name = 2;     // name of the publisher
+  required string commander_name = 3;     // name of the commander subscription
+  required string status_name = 4;        // name of the status query subscription
+  
+  // Looping variables
+  optional float cycle_frequency = 10;    // cycling frequency of the subscription loop
+  optional string config_filename = 11;   // configuration filename for the component
+  optional int64 max_iteration_interval = 12;        // Maximum iteration interval musec
+  optional float max_observation_frequency = 13;     // Maximum frequency of observations (Hz)
+  
+  // Component recieves observations
+  message ObservationType {               // Observations that the component expects to see
+    required string subscriber_name = 1;  // Name of the subscriber in settings for observations
+    optional string type = 2;             // Type of observation. Usually in header.Type()
+    optional float max_frequency = 3;     // Maximum expected frequency of observations (Hz)
+  }
+  repeated ObservationType observation_type = 20;  // Different types of observations
+}
+
+/** Filter configuration
  *    Max sliding window size, iteration interval and observation frequency are used to estimate
  *    the memory size allocation kept. When sizes 
  **/
@@ -195,6 +219,7 @@ message BeaconConfig {
 message CameraAprilTagCalibrationTargetConfig {
   required string name = 1;     // name of the calibrator
   repeated StaticApriltagStateMessage tags = 2;  // Static locations of tags on target
+  optional double position_var = 3;   // Variance of corner positions on target as 3x1 xyz vector
 }
 
 /** Camera intrinsics initialization configuration

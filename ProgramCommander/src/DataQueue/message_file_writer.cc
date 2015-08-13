@@ -56,6 +56,10 @@ bool MessageFileWriter::Open(const std::string& filename) {
 
 /** Close the file */
 bool MessageFileWriter::Close() {
+  if (!file_is_open_) {
+    LOG(ERROR) << "File is closed already";
+    return false;
+  }
   delete out_stream_;
   VLOG(3) << "Destructed the output stream";
   close(file_handle_);
@@ -83,6 +87,20 @@ bool MessageFileWriter::WriteMessage(const ::google::protobuf::Message& message)
     LOG(ERROR) << "Can not read message as file is closed.";
   }
 }
+
+bool MessageFileWriter::WriteMessages(const std::string filename,
+                                      const std::vector<google::protobuf::Message>& msgs) {
+  if (file_is_open_) {
+    Close();
+  }
+  Open(filename);
+  for (int i=0; i<msgs.size(); i++) {
+    WriteMessage(msgs[i]);
+  }
+  Close();
+  return true;
+}
+
 
 /** Directly take from code by Kenton Varda */
 bool MessageFileWriter::WriteDelimitedTo(
