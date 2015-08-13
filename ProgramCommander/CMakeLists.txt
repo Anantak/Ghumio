@@ -15,10 +15,10 @@ find_package(OpenCV REQUIRED)
 find_package(Ceres REQUIRED)
 #find_package(Boost 1.55 REQUIRED)
 # Includes for Pixy Camera - should we keep adding to this CMakeLists? Or should all be separate?
-find_package(libpixyusb REQUIRED)
-find_package(libusb-1.0 REQUIRED)
-find_package(Boost 1.55 COMPONENTS thread system chrono REQUIRED)
-find_package(UDev REQUIRED)
+#find_package(libpixyusb REQUIRED)
+#find_package(libusb-1.0 REQUIRED)
+#find_package(Boost 1.55 COMPONENTS thread system chrono REQUIRED)
+#find_package(UDev REQUIRED)
 
 # Packages needed for building the pixycam
 
@@ -80,6 +80,7 @@ set(SOURCE_FILES
   ${ProtoSources}
   ${PROJECT_SOURCE_DIR}/src/Utilities/common_functions.cc
   ${PROJECT_SOURCE_DIR}/src/ComponentCommander/component_commander.cc
+  ${PROJECT_SOURCE_DIR}/src/ComponentCommander/component.cc
   ${PROJECT_SOURCE_DIR}/src/ComponentCommander/component_status_keeper.cc
   ${PROJECT_SOURCE_DIR}/src/ComponentCommander/component_status_keeper_factory.cc
   ${PROJECT_SOURCE_DIR}/src/DataQueue/message_queue.cc
@@ -174,67 +175,57 @@ target_link_libraries(test_batch_vio ${CERES_LIBRARIES})
 target_link_libraries(test_batch_vio ${BOOST_LIBRARIES})
 target_link_libraries(test_batch_vio opengv)
 
-add_executable(test_sync_images_broadcaster
-  src/test/test_sync_images_broadcaster.cc
-  src/ImagesBroadcaster/sync_images_broadcaster.cc ${COMPONENT_SOURCE_FILES})
-target_link_libraries(test_sync_images_broadcaster ${GLOG_LIBRARIES})
-target_link_libraries(test_sync_images_broadcaster ${GFLAGS_LIBRARIES})
-target_link_libraries(test_sync_images_broadcaster ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_sync_images_broadcaster ${ZMQ_LIBRARIES})
-target_link_libraries(test_sync_images_broadcaster ${CTEMPLATE_LIBRARIES})
-target_link_libraries(test_sync_images_broadcaster flycapture-c flycapture)
-
-add_executable(test_show_save_images
-  src/test/test_show_save_images.cc
-  src/ImagesBroadcaster/show_save_images.cc ${COMPONENT_SOURCE_FILES})
-target_link_libraries(test_show_save_images ${GLOG_LIBRARIES})
-target_link_libraries(test_show_save_images ${GFLAGS_LIBRARIES})
-target_link_libraries(test_show_save_images ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_show_save_images ${ZMQ_LIBRARIES})
-target_link_libraries(test_show_save_images ${CTEMPLATE_LIBRARIES})
-target_link_libraries(test_show_save_images ${OpenCV_LIBS})
-target_link_libraries(test_show_save_images ${APRILTAG_LIBRARY})
-
-add_executable(test_pixy_camera src/test/test_pixy_camera.cc
-  src/PixyBroadcaster/pixy_camera_component.cc ${COMPONENT_SOURCE_FILES})
-target_link_libraries(test_pixy_camera ${LIBPIXYUSB_0_LIBRARY}) # libpixyusb should always come before libboost and libusb #
-target_link_libraries(test_pixy_camera ${GLOG_LIBRARIES})
-target_link_libraries(test_pixy_camera ${GFLAGS_LIBRARIES})
-target_link_libraries(test_pixy_camera ${Boost_LIBRARIES})
-target_link_libraries(test_pixy_camera ${LIBUSB_1_LIBRARIES})
-target_link_libraries(test_pixy_camera ${UDEV_LIBRARIES})
-target_link_libraries(test_pixy_camera ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_pixy_camera ${ZMQ_LIBRARIES})
-target_link_libraries(test_pixy_camera ${CTEMPLATE_LIBRARIES})
-target_link_libraries(test_pixy_camera ${OpenCV_LIBS})
-
-add_executable(test_beacon_serial_monitor src/test/test_beacon_serial_monitor.cc
-  src/SerialBroadcaster/beacon_serial_monitor.cc ${COMPONENT_SOURCE_FILES})
-target_link_libraries(test_beacon_serial_monitor ${GLOG_LIBRARIES})
-target_link_libraries(test_beacon_serial_monitor ${GFLAGS_LIBRARIES})
-target_link_libraries(test_beacon_serial_monitor ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_beacon_serial_monitor ${ZMQ_LIBRARIES})
-target_link_libraries(test_beacon_serial_monitor ${CTEMPLATE_LIBRARIES})
-target_link_libraries(test_beacon_serial_monitor usb)
-
-add_executable(test_front_rangers_monitor src/test/test_front_rangers_monitor.cc
-  src/SerialBroadcaster/front_rangers_monitor.cc ${COMPONENT_SOURCE_FILES})
-target_link_libraries(test_front_rangers_monitor ${GLOG_LIBRARIES})
-target_link_libraries(test_front_rangers_monitor ${GFLAGS_LIBRARIES})
-target_link_libraries(test_front_rangers_monitor ${PROTOBUF_LIBRARIES})
-target_link_libraries(test_front_rangers_monitor ${ZMQ_LIBRARIES})
-target_link_libraries(test_front_rangers_monitor ${CTEMPLATE_LIBRARIES})
-target_link_libraries(test_front_rangers_monitor usb)
-
-#add_executable(machine_model src/Models/machine_model.cc ${SOURCE_FILES})
-#target_link_libraries(machine_model ${GLOG_LIBRARIES})
-#target_link_libraries(machine_model ${GFLAGS_LIBRARIES})
-#target_link_libraries(machine_model ${PROTOBUF_LIBRARIES})
-#target_link_libraries(machine_model ${ZMQ_LIBRARIES})
-#target_link_libraries(machine_model ${CTEMPLATE_LIBRARIES})
-#target_link_libraries(machine_model ${CERES_LIBRARIES})
-#target_link_libraries(machine_model ${BOOST_LIBRARIES})
-#target_link_libraries(machine_model opengv)
+#add_executable(test_sync_images_broadcaster
+#  src/test/test_sync_images_broadcaster.cc
+#  src/ImagesBroadcaster/sync_images_broadcaster.cc ${COMPONENT_SOURCE_FILES})
+#target_link_libraries(test_sync_images_broadcaster ${GLOG_LIBRARIES})
+#target_link_libraries(test_sync_images_broadcaster ${GFLAGS_LIBRARIES})
+#target_link_libraries(test_sync_images_broadcaster ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_sync_images_broadcaster ${ZMQ_LIBRARIES})
+#target_link_libraries(test_sync_images_broadcaster ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_sync_images_broadcaster flycapture-c flycapture)
+#
+#add_executable(test_show_save_images
+#  src/test/test_show_save_images.cc
+#  src/ImagesBroadcaster/show_save_images.cc ${COMPONENT_SOURCE_FILES})
+#target_link_libraries(test_show_save_images ${GLOG_LIBRARIES})
+#target_link_libraries(test_show_save_images ${GFLAGS_LIBRARIES})
+#target_link_libraries(test_show_save_images ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_show_save_images ${ZMQ_LIBRARIES})
+#target_link_libraries(test_show_save_images ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_show_save_images ${OpenCV_LIBS})
+#target_link_libraries(test_show_save_images ${APRILTAG_LIBRARY})
+#
+#add_executable(test_pixy_camera src/test/test_pixy_camera.cc
+#  src/PixyBroadcaster/pixy_camera_component.cc ${COMPONENT_SOURCE_FILES})
+#target_link_libraries(test_pixy_camera ${LIBPIXYUSB_0_LIBRARY}) # libpixyusb should always come before libboost and libusb #
+#target_link_libraries(test_pixy_camera ${GLOG_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${GFLAGS_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${Boost_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${LIBUSB_1_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${UDEV_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${ZMQ_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_pixy_camera ${OpenCV_LIBS})
+#
+#add_executable(test_beacon_serial_monitor src/test/test_beacon_serial_monitor.cc
+#  src/SerialBroadcaster/beacon_serial_monitor.cc ${COMPONENT_SOURCE_FILES})
+#target_link_libraries(test_beacon_serial_monitor ${GLOG_LIBRARIES})
+#target_link_libraries(test_beacon_serial_monitor ${GFLAGS_LIBRARIES})
+#target_link_libraries(test_beacon_serial_monitor ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_beacon_serial_monitor ${ZMQ_LIBRARIES})
+#target_link_libraries(test_beacon_serial_monitor ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_beacon_serial_monitor usb)
+#
+#add_executable(test_front_rangers_monitor src/test/test_front_rangers_monitor.cc
+#  src/SerialBroadcaster/front_rangers_monitor.cc ${COMPONENT_SOURCE_FILES})
+#target_link_libraries(test_front_rangers_monitor ${GLOG_LIBRARIES})
+#target_link_libraries(test_front_rangers_monitor ${GFLAGS_LIBRARIES})
+#target_link_libraries(test_front_rangers_monitor ${PROTOBUF_LIBRARIES})
+#target_link_libraries(test_front_rangers_monitor ${ZMQ_LIBRARIES})
+#target_link_libraries(test_front_rangers_monitor ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_front_rangers_monitor usb)
 
 add_executable(beacon_model src/Models/beacon_model.cc ${SOURCE_FILES})
 target_link_libraries(beacon_model ${GLOG_LIBRARIES})
@@ -247,16 +238,85 @@ target_link_libraries(beacon_model ${BOOST_LIBRARIES})
 target_link_libraries(beacon_model opengv)
 target_link_libraries(beacon_model ${OpenCV_LIBS})
 
-add_executable(camera_intrinsics_filter src/Models/camera_intrinsics_filter.cc ${SOURCE_FILES})
-target_link_libraries(camera_intrinsics_filter ${GLOG_LIBRARIES})
-target_link_libraries(camera_intrinsics_filter gflags)
-target_link_libraries(camera_intrinsics_filter ${PROTOBUF_LIBRARIES})
-target_link_libraries(camera_intrinsics_filter ${ZMQ_LIBRARIES})
-target_link_libraries(camera_intrinsics_filter ${CTEMPLATE_LIBRARIES})
-target_link_libraries(camera_intrinsics_filter ${CERES_LIBRARIES})
-target_link_libraries(camera_intrinsics_filter ${BOOST_LIBRARIES})
-target_link_libraries(camera_intrinsics_filter opengv)
-target_link_libraries(camera_intrinsics_filter ${OpenCV_LIBS})
+add_executable(beacon_filter src/Models/beacon_filter.cc ${SOURCE_FILES})
+target_link_libraries(beacon_filter ${GLOG_LIBRARIES})
+target_link_libraries(beacon_filter gflags)
+target_link_libraries(beacon_filter ${PROTOBUF_LIBRARIES})
+target_link_libraries(beacon_filter ${ZMQ_LIBRARIES})
+target_link_libraries(beacon_filter ${CTEMPLATE_LIBRARIES})
+target_link_libraries(beacon_filter ${CERES_LIBRARIES})
+target_link_libraries(beacon_filter ${BOOST_LIBRARIES})
+target_link_libraries(beacon_filter opengv)
+target_link_libraries(beacon_filter ${OpenCV_LIBS})
+
+add_executable(test_models src/Models/test_models.cc ${SOURCE_FILES})
+target_link_libraries(test_models ${GLOG_LIBRARIES})
+target_link_libraries(test_models gflags)
+target_link_libraries(test_models ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_models ${ZMQ_LIBRARIES})
+target_link_libraries(test_models ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_models ${CERES_LIBRARIES})
+target_link_libraries(test_models ${BOOST_LIBRARIES})
+target_link_libraries(test_models opengv)
+target_link_libraries(test_models ${OpenCV_LIBS})
+
+add_executable(test_camera_calibration_filter
+  src/Models/test_camera_calibration_filter.cc
+  ${SOURCE_FILES})
+target_link_libraries(test_camera_calibration_filter ${GLOG_LIBRARIES})
+target_link_libraries(test_camera_calibration_filter gflags)
+target_link_libraries(test_camera_calibration_filter ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_camera_calibration_filter ${ZMQ_LIBRARIES})
+target_link_libraries(test_camera_calibration_filter ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_camera_calibration_filter ${CERES_LIBRARIES})
+target_link_libraries(test_camera_calibration_filter ${BOOST_LIBRARIES})
+target_link_libraries(test_camera_calibration_filter opengv)
+target_link_libraries(test_camera_calibration_filter ${OpenCV_LIBS})
+
+add_executable(test_calibration_target_motion_filter
+  src/Models/test_calibration_target_motion_filter.cc
+  ${SOURCE_FILES})
+target_link_libraries(test_calibration_target_motion_filter ${GLOG_LIBRARIES})
+target_link_libraries(test_calibration_target_motion_filter gflags)
+target_link_libraries(test_calibration_target_motion_filter ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_calibration_target_motion_filter ${ZMQ_LIBRARIES})
+target_link_libraries(test_calibration_target_motion_filter ${CTEMPLATE_LIBRARIES})
+target_link_libraries(test_calibration_target_motion_filter ${CERES_LIBRARIES})
+target_link_libraries(test_calibration_target_motion_filter ${BOOST_LIBRARIES})
+target_link_libraries(test_calibration_target_motion_filter opengv)
+target_link_libraries(test_calibration_target_motion_filter ${OpenCV_LIBS})
+
+# Qt4 related 
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+find_package(Qt4 COMPONENTS QtCore QtXml QtOpenGL QtGui)
+include(${QT_USE_FILE})
+include_directories(
+  /usr/include)    # for QGLViewer
+QT4_WRAP_CPP(MOCSrcs
+  src/Viewer/viewer.h)
+add_executable(test_viewer
+  src/Viewer/test_viewer.cc
+  src/Viewer/viewer.cc
+  src/Viewer/scene.cc
+  src/Viewer/dynamic_scene.cc
+  src/DataQueue/message_file_reader.cc
+  #${ProtoSources}
+  ${SOURCE_FILES}
+  ${MOCSrcs}
+  )
+target_link_libraries(test_viewer ${QT_LIBRARIES})
+target_link_libraries(test_viewer QGLViewer)
+target_link_libraries(test_viewer ${GLOG_LIBRARIES})
+target_link_libraries(test_viewer gflags)
+target_link_libraries(test_viewer ${PROTOBUF_LIBRARIES})
+target_link_libraries(test_viewer ${ZMQ_LIBRARIES})
+target_link_libraries(test_viewer ${CTEMPLATE_LIBRARIES})
+#target_link_libraries(test_viewer ${CERES_LIBRARIES})
+#target_link_libraries(test_viewer ${BOOST_LIBRARIES})
+#target_link_libraries(test_viewer opengv)
+#target_link_libraries(test_viewer ${OpenCV_LIBS})
+
 
 # old executables - may no longer compile
 
