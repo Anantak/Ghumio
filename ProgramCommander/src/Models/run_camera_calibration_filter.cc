@@ -82,7 +82,7 @@ bool CreateModel(const std::string& model_name, const int64_t& start_ts) {
   if (model_name == "Camera00.Intrinsics" || model_name == "Camera01.Intrinsics") {
     
     // Get starting calibrations from a calibration queue
-    const anantak::CameraIntrinsicsStateMessage* calib_msg = NULL;
+    const anantak::SensorMsg* calib_msg = nullptr;
     if (model_config.has_results_queue()) {
       VLOG(1) << "Getting starting data from " << model_config.results_queue();
       std::string sensor_name = "";
@@ -104,7 +104,7 @@ bool CreateModel(const std::string& model_name, const int64_t& start_ts) {
           // Point the pointer to the message
           anantak::MessageType* calib_msg_ptr = i_obs_store->second.observations->at(0).get();
           // Cast the message to sensor message
-          anantak::SensorMsg* sensor_msg = NULL;
+          anantak::SensorMsg* sensor_msg = nullptr;
           if (!(sensor_msg = dynamic_cast<anantak::SensorMsg*>(calib_msg_ptr))) {
             LOG(ERROR) << "Could not cast observation message to SensorMsg.";
           } else {
@@ -112,7 +112,8 @@ bool CreateModel(const std::string& model_name, const int64_t& start_ts) {
             if (!sensor_msg->has_camera_intrinsics_state_msg()) {
               LOG(ERROR) << "Calibration message does not have a camera intrinsics message";
             } else {
-              calib_msg = &sensor_msg->camera_intrinsics_state_msg();
+              //calib_msg = &sensor_msg->camera_intrinsics_state_msg();
+              calib_msg = sensor_msg;
             }
           }
         }
@@ -317,6 +318,7 @@ int main(int argc, char** argv) {
         }
       }
       
+      
       //// Start new iteration
       //if (!model_->StartIteration(mod_iteration_end_ts)) {
       //  LOG(ERROR) << "Could not start iteration for model " << model_name_;
@@ -354,16 +356,23 @@ int main(int argc, char** argv) {
         }
       }
       
+      // Is the model finished working?
+      bool model_is_finished = false;
+      if (model_->Finished()) {
+        LOG(INFO) << "Filter is finished with operations. Exiting.";
+        model_is_finished = true;
+      }
+      
       // check if there is a model close command. If so, close model, transition to waiting for model
       // check if there is a model change command. If so, close model, transition to create model
-      if (filter_->got_command() && !just_created_model) {
+      if ((filter_->got_command() && !just_created_model) || model_is_finished) {
         // Reset operating variables
         std::string model_name_ = "";
         bool is_live_ = false;
         int64_t historical_time_offset_ = 0;
         int64_t last_results_publish_ts_ = 0;
         // Process command
-        if (ProcessModelCommand(filter_->command_message(), model_name_, is_live_)) {
+        if (ProcessModelCommand(filter_->command_message(), model_name_, is_live_) || model_is_finished) {
           // Close the model
           if (!DestructModel()) {
             LOG(ERROR) << "Could not destruct the model. Exit.";

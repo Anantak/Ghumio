@@ -33,6 +33,9 @@ class Model {
   virtual bool RunIteration(
       const int64_t& iteration_end_ts) {}
   
+  // Should the model continue?
+  virtual bool Finished() const {return false;}
+  
   // Start a new iteration
   //virtual bool StartIteration(const int64_t& iteration_end_ts) {}
   
