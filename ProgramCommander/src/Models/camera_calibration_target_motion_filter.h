@@ -28,6 +28,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   
+  // Options for the CameraCalibrationTargetMotionFilter
   struct Options {
     
     // Frequency of running 
@@ -58,13 +59,16 @@ class CameraCalibrationTargetMotionFilter : public Model {
     double sigma_ep;  // sqrt var of spline's position fits to target's trajectory
     double sigma_prior_mult;  // this * above sigmas serve as sqrt variance of control pose priors
     
+    // Maximum number of iterations with no observations before filter resets
+    int32_t max_num_iterations_with_no_observations; 
+    
     Options(const std::string& config_filename=""):
       iteration_interval(          100000),
       
-      states_history_interval(   60000000),
-      longest_problem_interval(  30000000),
-      shortest_problem_interval( 15000000),
-      sliding_window_interval(    2000000),
+      states_history_interval(   20000000),
+      longest_problem_interval(   5000000),
+      shortest_problem_interval(  3000000),
+      sliding_window_interval(    1000000),
       solving_problem_interval(    100000),
       states_frequency(                10),
       
@@ -75,17 +79,19 @@ class CameraCalibrationTargetMotionFilter : public Model {
         solving_problem_interval      // solving problem interval
       ),
       
-      tag_camera_ids({1}),
+      tag_camera_ids({0}),
       //max_tag_camera_frequency(30),
       //max_tags_per_image(35),
       
       calibration_target_config_file("config/camera_intrisics_apriltag_calibration_target.cfg"),
       
-      num_pose_constraints_per_state(4),
+      num_pose_constraints_per_state(1),
       
-      sigma_eq(10.*kRadiansPerDegree),   // rad 
-      sigma_ep(0.05),                    // m
-      sigma_prior_mult(100.)
+      sigma_eq(2.*kRadiansPerDegree),   // rad 
+      sigma_ep(0.02),                    // m
+      sigma_prior_mult(1.),
+      
+      max_num_iterations_with_no_observations(5)
     {
       if (config_filename=="") {
         LOG(INFO) << "Created CameraCalibrationTargetMotionFilter Options using default parameters";        
@@ -99,8 +105,8 @@ class CameraCalibrationTargetMotionFilter : public Model {
         //    anantak::ReadProtobufFile<anantak::CameraCalibratorConfig>(config_file_path);
         //if (!config) {
         //  LOG(ERROR) << "Could not parse the config file resorting to default";
-        //} else {
-        //}
+        ///} else {
+        ///}
         
       }  // if config filename is provided
     }
@@ -110,12 +116,121 @@ class CameraCalibrationTargetMotionFilter : public Model {
     
   };
   
+  // Display for the filter - owns all display/drawing code
+  struct Display {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
+    // Main canvas
+    cv::Size size_;
+    cv::Mat display_image_;
+    std::string name_;
+    
+    bool initialized_;
+    bool window_showing_;
+    
+    Display(const std::string& name):
+        name_(name), size_(0,0), display_image_(), initialized_(false), window_showing_(false)
+    {
+      VLOG(1) << "Created CameraCalibrationTargetMotion filter display. Yet to be initialized.";
+    }
+    
+    bool SetSize(const int32_t& width, const int32_t& height) {
+      size_ = cv::Size(width, height);
+      display_image_.create(size_, CV_8UC3);
+      initialized_ = true;
+      VLOG(1) << "Initialized filter display with width, height: " << width << " " << height;
+      return true;
+    }
+    
+    bool ShowWindow(const int32_t& location_x=0, const int32_t& location_y=0) {
+      if (!initialized_) return false;
+      window_showing_ = true;
+      cv::namedWindow(name_, cv::WINDOW_AUTOSIZE ); // Create a window for display
+      cv::moveWindow(name_, location_x, location_y); // move window to a new positon
+      return true;
+    }
+    
+    bool HideWindow() {
+      if (!initialized_) return false;
+      window_showing_ = false;
+      cv::destroyWindow(name_); // destroy the display window
+      cv::waitKey(10);
+      cv::destroyWindow(name_); // destroy the display window
+      cv::waitKey(10);
+      cv::destroyWindow(name_); // destroy the display window
+      cv::waitKey(10);
+      cv::destroyWindow(name_); // destroy the display window
+      cv::waitKey(10);
+      cv::destroyWindow(name_); // destroy the display window
+      cv::waitKey(10);                
+      return true;
+    }
+    
+    bool DisplayImage() {
+      if (!initialized_ || !window_showing_) return false;
+      cv::imshow(name_, display_image_);
+      cv::waitKey(1);
+    }
+    
+    // Clear image
+    bool ClearImage() {
+      display_image_ = CV_BLACK;
+      return true;
+    }
+    
+    // Draw a message
+    bool ShowMessage(const std::string msg) {
+      cv::Point2d p0(size_.width*0.1, size_.height*0.1);
+      cv::putText(display_image_, msg, p0, CV_FONT_NORMAL, .5, CV_WHITE, 1);      
+      return true;
+    }
+    
+    // Draw Apriltags from a AprilTag message
+    bool DrawAprilTags(const anantak::AprilTagMessage& apriltag_msg) {
+      if (!initialized_) return false;
+      if (apriltag_msg.tag_id_size() == 0) {
+        LOG(ERROR) << "No tag in april tag message. Not expacted.";
+        return false;
+      }
+      // Go though each tag, draw it
+      for (int i_tag=0; i_tag<apriltag_msg.tag_id_size(); i_tag++) {
+        const std::string& id = apriltag_msg.tag_id(i_tag);
+        cv::Point2d p0(apriltag_msg.u_1(i_tag), apriltag_msg.v_1(i_tag));
+        cv::Point2d p1(apriltag_msg.u_2(i_tag), apriltag_msg.v_2(i_tag));
+        cv::Point2d p2(apriltag_msg.u_3(i_tag), apriltag_msg.v_3(i_tag));
+        cv::Point2d p3(apriltag_msg.u_4(i_tag), apriltag_msg.v_4(i_tag));
+        cv::line(display_image_, p0, p1, CV_YELLOW, 1);
+        cv::line(display_image_, p1, p2, CV_YELLOW, 1);
+        cv::line(display_image_, p2, p3, CV_YELLOW, 1);
+        cv::line(display_image_, p3, p0, CV_YELLOW, 1);
+        //cv::line(display_image_, p0, p2, CV_YELLOW, 1);
+        //cv::line(display_image_, p1, p3, CV_YELLOW, 1);
+        //cv::circle(display_image_, p0, 3, CV_GREEN, 1);
+        //cv::circle(display_image_, p1, 3, CV_RED, 2);
+        //cv::circle(display_image_, p2, 3, CV_BLUE, 2);
+        //cv::circle(display_image_, p3, 3, CV_BLACK, 2);
+        //cv::putText(display_image_, id, cv::Point(dd.cxy[0],dd.cxy[1]),
+        //    CV_FONT_NORMAL, .5, CV_WHITE, 4);
+        //cv::putText(display_image_, id, cv::Point(dd.cxy[0],dd.cxy[1]),
+        //    CV_FONT_NORMAL, .5, CV_BLUE, 1);
+      }
+      
+      return true;
+    }
+    
+  };  // Display
+  
   // Options
   CameraCalibrationTargetMotionFilter::Options options_;
+  
+  // Display
+  CameraCalibrationTargetMotionFilter::Display display_;
+  bool show_;   // true: show the display, false: hide the display
   
   // Running mode
   enum FilterRunMode {kInitializing, kFiltering};
   FilterRunMode filter_run_mode_;
+  int32_t num_consecutive_iterations_with_zero_observations_;
   
   // Calibration target
   CameraCalibrationTarget target_;
@@ -150,6 +265,12 @@ class CameraCalibrationTargetMotionFilter : public Model {
   std::unique_ptr<anantak::TimedCircularQueue<anantak::PoseSpline_ControlPosePrior>>
       spline_pose_priors_;
   
+  // Spline target view residuals queue
+  PoseSpline_CalibrationTargetViewResidual::Options
+      spline_target_view_residuals_options_;
+  std::unique_ptr<anantak::TimedCircularQueue<anantak::PoseSpline_CalibrationTargetViewResidual>>
+      spline_target_view_residuals_;
+  
   // Kinematics pose forecast for the end of iteration using the data for the iteration
   KinematicState K_forecast_;
   
@@ -161,7 +282,12 @@ class CameraCalibrationTargetMotionFilter : public Model {
   
   // Initializing target poses
   std::vector<PoseState> starting_poses_;
-  PoseState last_seen_tgt_pose_;
+  
+  // Iteration messages
+  std::vector<anantak::SensorMsg> iteration_msgs_;
+  
+  // Maximum iteration observations timestamp
+  int64_t max_iteration_observations_ts_;
   
   CameraCalibrationTargetMotionFilter(
       const CameraCalibrationTargetMotionFilter::Options& options,
@@ -174,7 +300,11 @@ class CameraCalibrationTargetMotionFilter : public Model {
     camera_(options.tag_camera_ids.at(0)),                  // initiating at first camera
     undistorted_camera_(options.tag_camera_ids.at(0)),      // initiating at first camera 
     problem_(nullptr), problem_options_(), solver_options_(), solver_summary_(),
-    cubic_pose_spline_options_(options.sigma_eq, options.sigma_ep, options.sigma_prior_mult)
+    cubic_pose_spline_options_(options.sigma_eq, options.sigma_ep, options.sigma_prior_mult),
+    spline_target_view_residuals_options_(),
+    num_consecutive_iterations_with_zero_observations_(0),
+    max_iteration_observations_ts_(0),
+    display_("CameraCalibrationTargetMotionFilter")
   {
     Initialize();
   }
@@ -206,6 +336,9 @@ class CameraCalibrationTargetMotionFilter : public Model {
     LOG(INFO) << "Loaded camera: " << camera_.ToString(1);
     undistorted_camera_.Create(camera_);
     LOG(INFO) << "Created undistorted camera";
+    
+    // Initiate display
+    display_.SetSize(camera_.width(), camera_.height());
     
     // Set optimization options
     problem_options_.cost_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
@@ -269,6 +402,15 @@ class CameraCalibrationTargetMotionFilter : public Model {
             num_states_to_keep, _pose_prior_proto));
     spline_pose_priors_ = std::move(spp_ptr);
     
+    // Spline target view residuals queue
+    anantak::PoseSpline_CalibrationTargetViewResidual
+        _target_view_resid_proto(&cubic_pose_spline_options_,
+                                 &spline_target_view_residuals_options_);
+    std::unique_ptr<anantak::TimedCircularQueue<anantak::PoseSpline_CalibrationTargetViewResidual>>
+        stvr_ptr(new anantak::TimedCircularQueue<anantak::PoseSpline_CalibrationTargetViewResidual>(
+            num_states_to_keep*options_.num_pose_constraints_per_state, _target_view_resid_proto));
+    spline_target_view_residuals_ = std::move(stvr_ptr);
+    
     return true;
   }
   
@@ -285,58 +427,87 @@ class CameraCalibrationTargetMotionFilter : public Model {
   bool RunInitializingIteration(const int64_t& iteration_end_ts,
       const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations) {
     
-    // Collect all AprilTag observations
-    std::vector<anantak::SensorMsg> sensor_msgs;
+    starting_poses_.clear();
+    
+    // Calculate target's approximate poses from the observations 
     for (int i_file=0; i_file<observations.size(); i_file++) {
       for (int i_msg=0; i_msg<observations.at(i_file)->size(); i_msg++) {
-        const anantak::SensorMsg& msg = observations.at(i_file)->at(i_msg);
-        if (msg.has_header()) {
-          if (msg.header().type() == "AprilTags") {
-            sensor_msgs.emplace_back(msg);
-          }
+        PoseState _pose;
+        const anantak::SensorMsg _msg = observations.at(i_file)->at(i_msg);
+        if (CalculateApproxTargetPose(_msg, &_pose)) {
+          _pose.SetTimestamp(_msg.header().timestamp());
+          starting_poses_.emplace_back(_pose);
         }
-      }
-    }
-    
-    if (sensor_msgs.size() == 0) {
-      // Nothing to do. Wait for observations.
-      return true;
-    }
-    VLOG(1) << "Got " << sensor_msgs.size() << " AprilTag messages.";
-    
-    // Make a starting guess of the target pose from the first (few) message(s)
-    for (int i=0; i<sensor_msgs.size(); i++) {
-      PoseState starting_pose;
-      const int64_t& apriltag_msg_ts = sensor_msgs.at(i).header().timestamp();
-      const AprilTagMessage& apriltag_msg = sensor_msgs.at(i).april_msg();
-      anantak::AprilTagMessage undist_apriltag_msg;
-      undistorted_camera_.Undistort(apriltag_msg, &undist_apriltag_msg);
-      target_.CalculateTargetPose(undist_apriltag_msg, undistorted_camera_.camera_, &starting_pose);
-      if (!starting_pose.IsZero()) {
-        starting_pose.SetTimestamp(apriltag_msg_ts);
-        starting_poses_.emplace_back(starting_pose);
+        if (starting_poses_.size()>=2) break;
       }
       if (starting_poses_.size()>=2) break;
     }
     
+    /*// Collect all AprilTag observations
+    //std::vector<anantak::SensorMsg> sensor_msgs;
+    //for (int i_file=0; i_file<observations.size(); i_file++) {
+    //  for (int i_msg=0; i_msg<observations.at(i_file)->size(); i_msg++) {
+    //    const anantak::SensorMsg& msg = observations.at(i_file)->at(i_msg);
+    //    if (msg.has_header()) {
+    //      if (msg.header().type() == "AprilTags") {
+    //        sensor_msgs.emplace_back(msg);
+    //      }
+    //    }
+    //  }
+    ///}
+    //
+    //if (sensor_msgs.size() == 0) {
+    //  // Nothing to do. Wait for observations.
+    //  return true;
+    ///}
+    //VLOG(1) << "Got " << sensor_msgs.size() << " AprilTag messages.";
+    //
+    //// Make a starting guess of the target pose from the first (few) message(s)
+    //for (int i=0; i<sensor_msgs.size(); i++) {
+    //  PoseState starting_pose;
+    //  const int64_t& apriltag_msg_ts = sensor_msgs.at(i).header().timestamp();
+    //  const AprilTagMessage& apriltag_msg = sensor_msgs.at(i).april_msg();
+    //  anantak::AprilTagMessage undist_apriltag_msg;
+    //  undistorted_camera_.Undistort(apriltag_msg, &undist_apriltag_msg);
+    //  target_.CalculateTargetPose(undist_apriltag_msg, undistorted_camera_.camera_, &starting_pose);
+    //  if (!starting_pose.IsZero()) {
+    //    starting_pose.SetTimestamp(apriltag_msg_ts);
+    //    starting_poses_.emplace_back(starting_pose);
+    /// }
+    //  if (starting_poses_.size()>=2) break;
+    ///}*/
+    
+    bool spline_initiated = false;
+    //if (starting_poses_.size()==1) {
+    //  // Initiate spline using a single pose
+    //  if (!cubic_pose_spline_->InitiateSpline(starting_poses_.at(0))) {
+    //    LOG(ERROR) << "Could not initiate spline using first pose. Restating";
+    //    starting_poses_.clear();
+    //    cubic_pose_spline_->Reset();
+    ///  } else {
+    //    spline_initiated = true;
+    ///  }
+    ///} else
     if (starting_poses_.size()>=2) {
       // Initiate the spline using first two poses
       if (!cubic_pose_spline_->InitiateSpline(starting_poses_.at(0), starting_poses_.at(1))) {
         LOG(ERROR) << "Could not initiate spline using first two poses. Restating";
         starting_poses_.clear();
         cubic_pose_spline_->Reset();
-        
       } else {
-        
-        if (!SetStartingStatesAndResiduals()) {
-          LOG(FATAL) << "Could not set starting states and residuals";
-        }
-        
-        // Switch filter to filtering mode
-        filter_run_mode_ = kFiltering;
-        LOG(INFO) << "Switched filter from initializing to filtering.";
-        return RunIteration(iteration_end_ts, observations);
+        spline_initiated = true;
       }
+    }
+    
+    if (spline_initiated) {
+      if (!SetStartingStatesAndResiduals()) {
+        LOG(FATAL) << "Could not set starting states and residuals";
+      }
+      
+      // Switch filter to filtering mode
+      filter_run_mode_ = kFiltering;
+      LOG(INFO) << "Switched filter from initializing to filtering.";
+      return RunIteration(iteration_end_ts, observations);
     }
     
     return true;
@@ -369,6 +540,31 @@ class CameraCalibrationTargetMotionFilter : public Model {
     spline_pose_priors_->SetFixedPoint("ProblemEnd");
     spline_pose_priors_->SetFixedPoint("PreWindowBegin");
     
+    // Prepare the spline_target_view_residuals_ queue for usage
+    spline_target_view_residuals_->SetStartingTimestamp(starting_state_ts-1);
+    spline_target_view_residuals_->SetFixedPoint("PreProblemBegin");
+    spline_target_view_residuals_->SetFixedPoint("ProblemEnd");
+    spline_target_view_residuals_->SetFixedPoint("PreWindowBegin");
+    
+    return true;
+  }
+  
+  // Reset the filter
+  inline bool Reset() {
+    LOG(INFO) << "Resetting filter";
+    filter_run_mode_ = kInitializing;
+    //filter_start_ts_ = ??
+    //swf_iterations_.StartFiltering(starting_state_ts);
+    //iteration_record_.Reset(starting_state_ts);
+    starting_poses_.clear();
+    linear_observations_spline_->Reset();
+    cubic_pose_spline_->Reset();
+    spline_pose_residuals_->Clear();
+    spline_pose_priors_->Clear();
+    spline_target_view_residuals_->Clear();
+    if (problem_) problem_.release();
+    K_forecast_.SetZero();
+    num_consecutive_iterations_with_zero_observations_ = 0;
     return true;
   }
   
@@ -389,7 +585,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
   // Run iteration with historical readings read using FileKeeper
   bool RunIteration(const int64_t& iteration_end_ts,
       const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations,
-      const bool save_data = false) {
+      const bool save_data = false, const bool use_ending_knot_time = false) {
     
     if (filter_run_mode_ == kInitializing) {
       return RunInitializingIteration(iteration_end_ts, observations);
@@ -410,7 +606,10 @@ class CameraCalibrationTargetMotionFilter : public Model {
       return false;
     }
     
-    RunReporting(iteration_end_ts);
+    if (!RunReporting(iteration_end_ts, use_ending_knot_time)) {
+      LOG(ERROR) << "Could not run reporting";
+      return false;      
+    }
     
     return true;
   }
@@ -429,10 +628,87 @@ class CameraCalibrationTargetMotionFilter : public Model {
     
     return true;
   }
-
+  
   // Create new states for the iteration
   bool CreateIterationStatesAndResiduals(const int64_t& iteration_end_ts,
       const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations) {
+    
+    // Collect valid observations
+    iteration_msgs_.clear();
+    for (int i_file=0; i_file<observations.size(); i_file++) {
+      for (int i_msg=0; i_msg<observations.at(i_file)->size(); i_msg++) {
+        const anantak::SensorMsg _msg = observations.at(i_file)->at(i_msg);
+        if (IsValidTargetViewObservation(_msg)) {
+          iteration_msgs_.emplace_back(_msg);
+          iteration_record_.iteration_counters["TargetObservations"]++;
+        }
+      }
+    }
+    
+    // Check if no observations were seen
+    int32_t num_observations = iteration_msgs_.size();
+    if (num_observations == 0) {
+      num_consecutive_iterations_with_zero_observations_++;
+      VLOG(1) << "No observation was received. Consecutive zero obs iterations = "
+        << num_consecutive_iterations_with_zero_observations_;
+    } else {
+      num_consecutive_iterations_with_zero_observations_ = 0;
+    }
+    if (num_consecutive_iterations_with_zero_observations_ >=
+        options_.max_num_iterations_with_no_observations) {
+      LOG(WARNING) << "Resetting filter as no observations were seen for a while.";
+      Reset();
+      return false;
+    }
+    
+    // Maximum iteration observations' ts is used to extend spline at the end of the iteration
+    max_iteration_observations_ts_ = 0;
+    
+    // Create a tag view residual for every observation
+    for (int i=0; i<num_observations; i++) {
+      const anantak::SensorMsg& msg = iteration_msgs_.at(i);
+      const int64_t ts = msg.header().timestamp();
+      
+      // Update maximum observation ts
+      if (max_iteration_observations_ts_ < ts) {max_iteration_observations_ts_ = ts;}
+      
+      // Create the ending residual using the actual observation
+      VLOG(1) << "Creating target view residual at ts " << ts;
+      anantak::PoseSpline_CalibrationTargetViewResidual* spline_target_view_resid =
+          spline_target_view_residuals_->NextMutableElement();
+      spline_target_view_resid->Reset();   // Making sure state is fresh
+      if (!spline_target_view_resid->Create(msg,
+                                            &target_,
+                                            &undistorted_camera_,
+                                            cubic_pose_spline_.get(),
+                                            &camera_)) {
+        LOG(ERROR) << "Could not create a spline target view residual for observation. Skip";
+        spline_target_view_resid->Reset();
+        spline_target_view_residuals_->decrement();
+      } else {
+        spline_target_view_residuals_->SetTimestamp(ts);
+        iteration_record_.iteration_counters["SplinePoseResidualsCreated"]++;
+      }
+      
+    }   // for each observation
+    
+    // Create priors for control poses created in this iteration
+    VLOG(2) << "Creating control pose priors";
+    int32_t num_created = 0;
+    if (!cubic_pose_spline_->CreateControlPosePriors(spline_pose_priors_.get(), &num_created)) {
+      LOG(ERROR) << "Could not create spline pose priors. Skip.";
+    } else {
+      iteration_record_.iteration_counters["SplinePosePriorsCreated"] += num_created;
+    }
+    
+    return true;
+  }
+
+  // Create new states for the iteration
+  bool CreateIterationStatesAndResiduals0(const int64_t& iteration_end_ts,
+      const std::vector<std::unique_ptr<std::vector<anantak::SensorMsg>>>& observations) {
+    
+    int32_t num_observations = 0;
     
     // Calculate target's approximate poses from the observations 
     std::vector<PoseState> approx_tgt_poses;
@@ -443,8 +719,24 @@ class CameraCalibrationTargetMotionFilter : public Model {
         if (CalculateApproxTargetPose(_msg, &_pose)) {
           _pose.SetTimestamp(_msg.header().timestamp());
           approx_tgt_poses.emplace_back(_pose);
+          num_observations++;
         }
       }
+    }
+    
+    // Check if no observations were seen
+    if (num_observations == 0) {
+      num_consecutive_iterations_with_zero_observations_++;
+      VLOG(1) << "No observation was received. Consecutive zero obs iterations = "
+        << num_consecutive_iterations_with_zero_observations_;
+    } else {
+      num_consecutive_iterations_with_zero_observations_ = 0;
+    }
+    if (num_consecutive_iterations_with_zero_observations_ >=
+        options_.max_num_iterations_with_no_observations) {
+      LOG(WARNING) << "Resetting filter as no observations were seen for a while.";
+      Reset();
+      return false;
     }
     
     // Create a spline pose residual for every target pose observation
@@ -463,7 +755,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
       VLOG(2) << "Added target observation to linear observation spline " << tgt_obs.ToString();
       
       // Add interpolated observations' residuals
-      if (last_obs_ts > 0) {
+      /*if (last_obs_ts > 0) {
         for (int64_t interp_ts = ((last_obs_ts / inter_pose_constraint_interval_)+1) * inter_pose_constraint_interval_;
              interp_ts < tgt_obs.Timestamp();
              interp_ts += inter_pose_constraint_interval_) {
@@ -485,9 +777,9 @@ class CameraCalibrationTargetMotionFilter : public Model {
           }
           
         }
-      }
+      }*/
       
-      // Create the ending residual using the actual residual
+      // Create the ending residual using the actual observation
       VLOG(1) << "Creating target observation residual at ts " << tgt_obs.Timestamp();
       anantak::PoseSpline_PoseResidual* spline_pose_resid = spline_pose_residuals_->NextMutableElement();
       spline_pose_resid->Reset();
@@ -500,7 +792,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
         iteration_record_.iteration_counters["SplinePoseResidualsCreated"]++;
       }
       
-    }
+    }  // for each observation
     
     // Create priors for control poses created in this iteration
     int32_t num_created = 0;
@@ -516,7 +808,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
   
   bool CalculateApproxTargetPose(const anantak::SensorMsg& msg, PoseState* pose) {
     if (!IsValidTargetViewObservation(msg)) {
-      LOG(INFO) << "Skipping message, it is invalid or is not processed by this filter.";
+      VLOG(2) << "Skipping message, it is invalid or is not processed by this filter.";
       return false;
     }
     
@@ -567,7 +859,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
       auto it = std::find(options_.tag_camera_ids.begin(), options_.tag_camera_ids.end(), cam_id);
       if (it == options_.tag_camera_ids.end()) {
         // This camera is not processed by this filter
-        LOG(INFO) << "Camera of this Apriltag message is not processed by this filter";
+        VLOG(1) << "Camera of this Apriltag message (" << cam_id << ") is not processed by this filter";
         return false;
       }
       
@@ -602,7 +894,7 @@ class CameraCalibrationTargetMotionFilter : public Model {
         CalculatePriors();
         
         VLOG(1) << "Resetting the problem.";
-        problem_.reset();
+        problem_.release();
       }
       
       // Create a new problem object
@@ -630,7 +922,8 @@ class CameraCalibrationTargetMotionFilter : public Model {
     if (save_data) {SaveData("Pre");}
     
     // Solve the problem
-    if (swf_iterations_.IsItTimeToSolveProblem()) {
+    //if (swf_iterations_.IsItTimeToSolveProblem()) {
+    if (true) {                                   // Solve in every iteration
       VLOG(2) << "Solving the problem.";
       SolveProblem();
       VLOG(2) << "Solved the problem.";
@@ -663,14 +956,28 @@ class CameraCalibrationTargetMotionFilter : public Model {
   }
   
   // Run reporting at the end of the iteration
-  bool RunReporting(const int64_t& iteration_end_ts) {
+  bool RunReporting(const int64_t& iteration_end_ts, bool use_ending_knot_time = false) {
     
     VLOG(1) << "Iteration record " << iteration_record_.IterationCountersToString();
     VLOG(1) << "Algorithm record " << iteration_record_.AlgorithmCountersToString();
     
+    // Timestamp to be used for projection
+    int64_t interpolation_ts = iteration_end_ts;
+    if (use_ending_knot_time) {interpolation_ts = cubic_pose_spline_->EndingTimestamp();}
+    
     // Project the pose at the end of the iteration
-    cubic_pose_spline_->InterpolatePose(iteration_end_ts, &K_forecast_, true);  // true: include errors
+    cubic_pose_spline_->InterpolatePose(interpolation_ts, &K_forecast_, true);  // true: include errors
     VLOG(1) << "Iteration end pose forecast: \n  " << K_forecast_.ToString(2);
+    
+    // Show the image if asked to
+    if (show_) {
+      display_.ClearImage();
+      if (iteration_msgs_.size()>0) {
+        display_.DrawAprilTags(iteration_msgs_.back().april_msg());
+      }
+      //display_.DrawPoseState(target_pose, camera_intrinsics_);
+      display_.DisplayImage();
+    }
     
     // Pose will be transmitted by the filter
     
@@ -679,6 +986,115 @@ class CameraCalibrationTargetMotionFilter : public Model {
   
   // Save data to disk for plotting and analysis
   bool SaveData(const std::string& prefix="", bool save_all_data = false, bool dont_save = false) {
+    
+    if (dont_save) return true;    // Disables data saving
+    
+    bool save_q_as_aa = true;
+    
+    // Calculate poses at knot points of the spline
+    std::vector<Vector39d> kin_states_vec;
+    int64_t _ts;
+    for (_ts =  cubic_pose_spline_->CurrentStartingTimestamp();
+         _ts <= cubic_pose_spline_->CurrentEndingTimestamp();
+         _ts += cubic_pose_spline_->KnotDistance()) {
+      KinematicState _K;
+      cubic_pose_spline_->InterpolatePose(_ts, &_K, true);  // Include errors is set to true
+      VLOG(3) << "Interpolated pose: " << _K.ToString(2);
+      kin_states_vec.emplace_back(_K.ToVector(save_q_as_aa));
+    }
+    // Save poses to file
+    Eigen::Matrix<double,39,Eigen::Dynamic> kin_states_mat;
+    kin_states_mat.resize(39,kin_states_vec.size());
+    for (int i=0; i<kin_states_vec.size(); i++) {
+      kin_states_mat.col(i) = kin_states_vec[i];
+    }
+    std::string filename =
+      "src/Models/Plots/TargetKinFit." + prefix + std::to_string(iteration_record_.iteration_number%10) + ".data.csv";
+    WriteMatrixToCSVFile(filename, kin_states_mat.transpose());
+    
+    if (prefix=="") {
+      // Target pose observations
+      std::vector<Vector8d> tgt_poses_vec;          // Approximate guess from observation
+      for (auto fp = spline_target_view_residuals_->GetNextFixedPoint("PreProblemBegin");
+           spline_target_view_residuals_->IsNotPastFixedPoint("ProblemEnd", fp);
+           spline_target_view_residuals_->IncrementFixedPoint(fp)) {
+        const PoseState& _P = spline_target_view_residuals_->ElementAtFixedPoint(fp).Observation();
+        Vector8d vec;
+        _P.ToVector(&vec, cubic_pose_spline_->StartingTimestamp(), save_q_as_aa);
+        tgt_poses_vec.emplace_back(vec);
+      }
+      // Save target poses to file
+      Eigen::Matrix<double,8,Eigen::Dynamic> tgt_poses_mat;
+      tgt_poses_mat.resize(8,tgt_poses_vec.size());
+      for (int i=0; i<tgt_poses_vec.size(); i++) {
+        tgt_poses_mat.col(i) = tgt_poses_vec[i];
+      }
+      filename =
+        "src/Models/Plots/TargetPoses." + std::to_string(iteration_record_.iteration_number%10) + ".data.csv";
+      WriteMatrixToCSVFile(filename, tgt_poses_mat.transpose());
+      
+      // Starting pose calculated from the spline
+      std::vector<Vector8d> tgt_poses_interp_vec;   // Starting guess from the spline
+      for (auto fp = spline_target_view_residuals_->GetNextFixedPoint("PreProblemBegin");
+           spline_target_view_residuals_->IsNotPastFixedPoint("ProblemEnd", fp);
+           spline_target_view_residuals_->IncrementFixedPoint(fp)) {
+        const PoseState& _P = spline_target_view_residuals_->ElementAtFixedPoint(fp).StartingTargetPose();
+        Vector8d vec;
+        _P.ToVector(&vec, cubic_pose_spline_->StartingTimestamp(), save_q_as_aa);
+        tgt_poses_interp_vec.emplace_back(vec);
+      }
+      // Save target interpolated poses to file
+      Eigen::Matrix<double,8,Eigen::Dynamic> tgt_poses_interp_mat;
+      tgt_poses_interp_mat.resize(8,tgt_poses_interp_vec.size());
+      for (int i=0; i<tgt_poses_interp_vec.size(); i++) {
+        tgt_poses_interp_mat.col(i) = tgt_poses_interp_vec[i];
+      }
+      filename =
+        "src/Models/Plots/TargetPosesInterp." + std::to_string(iteration_record_.iteration_number%10) + ".data.csv";
+      WriteMatrixToCSVFile(filename, tgt_poses_interp_mat.transpose());
+    }
+    
+    // Control points of cubic spline
+    std::vector<Vector8d> cubic_spline_control_poses_vec;
+    for (int i=0; i<cubic_pose_spline_->NumControlPoints(); i++) {
+      Vector8d vec;
+      const PoseState& _P = cubic_pose_spline_->control_poses_->At(i);
+      _P.ToVector(&vec, cubic_pose_spline_->StartingTimestamp(), save_q_as_aa);
+      cubic_spline_control_poses_vec.emplace_back(vec);
+    }
+    // Save target interpolated poses to file
+    Eigen::Matrix<double,8,Eigen::Dynamic> cubic_spline_control_poses_mat;
+    cubic_spline_control_poses_mat.resize(8,cubic_spline_control_poses_vec.size());
+    for (int i=0; i<cubic_spline_control_poses_vec.size(); i++) {
+      cubic_spline_control_poses_mat.col(i) = cubic_spline_control_poses_vec[i];
+    }
+    filename =
+      "src/Models/Plots/CubicSplineControlPoses." + prefix + std::to_string(iteration_record_.iteration_number%10) + ".data.csv";
+    WriteMatrixToCSVFile(filename, cubic_spline_control_poses_mat.transpose());
+    
+    if (prefix=="") {
+      std::vector<Vector8d> cubic_spline_state_control_poses_vec;
+      for (int i=0; i<cubic_pose_spline_->NumControlPoints(); i++) {
+        Vector8d vec;
+        const PoseState& _P = cubic_pose_spline_->control_poses_->At(i);
+        _P.FirstEstimateToVector(&vec, cubic_pose_spline_->StartingTimestamp(), save_q_as_aa);
+        cubic_spline_state_control_poses_vec.emplace_back(vec);
+      }
+      Eigen::Matrix<double,8,Eigen::Dynamic> cubic_spline_state_control_poses_mat;
+      cubic_spline_state_control_poses_mat.resize(8,cubic_spline_state_control_poses_vec.size());
+      for (int i=0; i<cubic_spline_state_control_poses_vec.size(); i++) {
+        cubic_spline_state_control_poses_mat.col(i) = cubic_spline_state_control_poses_vec[i];
+      }
+      filename =
+        "src/Models/Plots/CubicSplineStateControlPoses." + std::to_string(iteration_record_.iteration_number%10) + ".data.csv";
+      WriteMatrixToCSVFile(filename, cubic_spline_state_control_poses_mat.transpose());
+    }
+    
+    return true;
+  }
+  
+  // Save data to disk for plotting and analysis
+  bool SaveData0(const std::string& prefix="", bool save_all_data = false, bool dont_save = false) {
     
     if (dont_save) return true;    // Disables data saving
     
@@ -881,31 +1297,53 @@ class CameraCalibrationTargetMotionFilter : public Model {
   //  return true;
   ///}*/
   
+  
   bool CalculatePriors() {
     return true;
   }
+  
   
   bool AddPriors() {
     return true;
   }
   
+  
   bool AddDataToProblem() {
     int64_t problem_data_start_ts = swf_iterations_.DataBeginTimestamp();
     
-    // Locate the PreProblemBegin marker for spline_pose_residuals_
-    if (!spline_pose_residuals_->PositionFixedPointBeforeTimestamp(
+    //// Locate the PreProblemBegin marker for spline_pose_residuals_
+    //if (!spline_pose_residuals_->PositionFixedPointBeforeTimestamp(
+    //      "PreProblemBegin", problem_data_start_ts, true)) {
+    //  LOG(ERROR) << "Could not locate the problem_data_start_ts = " << problem_data_start_ts;
+    //  return false;
+    ///}
+    //VLOG(2) << "spline_pose_residuals_: PreProblemBegin marker: " <<
+    //    spline_pose_residuals_->FixedPointToString("PreProblemBegin");
+    //
+    //// Add spline_pose_residuals_ to the problem
+    //for (auto fp = spline_pose_residuals_->GetNextFixedPoint("PreProblemBegin");
+    //     spline_pose_residuals_->IsNotPastFixedPoint("ProblemEnd", fp);
+    //     spline_pose_residuals_->IncrementFixedPoint(fp)) {
+    //  spline_pose_residuals_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
+    //  iteration_record_.iteration_counters["SplinePoseResidualsAdded"]++;
+    ///}
+    
+    // Locate the PreProblemBegin marker for spline_target_view_residuals_
+    if (!spline_target_view_residuals_->PositionFixedPointBeforeTimestamp(
           "PreProblemBegin", problem_data_start_ts, true)) {
       LOG(ERROR) << "Could not locate the problem_data_start_ts = " << problem_data_start_ts;
       return false;
     }
-    VLOG(2) << "spline_pose_residuals_: PreProblemBegin marker: " <<
-        spline_pose_residuals_->FixedPointToString("PreProblemBegin");
+    VLOG(2) << "spline_target_view_residuals_: PreProblemBegin marker: " <<
+        spline_target_view_residuals_->FixedPointToString("PreProblemBegin");
     
-    // Add spline_pose_residuals_ to the problem
-    for (auto fp = spline_pose_residuals_->GetNextFixedPoint("PreProblemBegin");
-         spline_pose_residuals_->IsNotPastFixedPoint("ProblemEnd", fp);
-         spline_pose_residuals_->IncrementFixedPoint(fp)) {
-      spline_pose_residuals_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
+    // Add spline_target_view_residuals_ to the problem
+    for (auto fp = spline_target_view_residuals_->GetNextFixedPoint("PreProblemBegin");
+         spline_target_view_residuals_->IsNotPastFixedPoint("ProblemEnd", fp);
+         spline_target_view_residuals_->IncrementFixedPoint(fp)) {
+      VLOG(2) << "spline_target_view_residuals_ add data to problem fp of resid " << fp.ToString();
+          //<< " Address: " << spline_target_view_residuals_->MutableElementAtFixedPoint(fp);
+      spline_target_view_residuals_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
       iteration_record_.iteration_counters["SplinePoseResidualsAdded"]++;
     }
     
@@ -924,13 +1362,52 @@ class CameraCalibrationTargetMotionFilter : public Model {
          spline_pose_priors_->IncrementFixedPoint(fp)) {
       spline_pose_priors_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
       iteration_record_.iteration_counters["SplinePosePriorsAdded"]++;
-    }    
+    }   
     return true;
   }
   
-  
+
   // Mark states in the problem before the solving window as constant
   bool MarkStatesConstant() {
+    int64_t window_start_ts = swf_iterations_.SlidingWindowTimestamp();
+    
+    // Locate the PreWindowBegin marker for spline_target_view_residuals_
+    if (!spline_target_view_residuals_->PositionFixedPointBeforeTimestamp(
+          "PreWindowBegin", window_start_ts, true)) {
+      LOG(WARNING) << "Could not locate the window_start_ts for marking "
+          << "constant states in spline_target_view_residuals_ queue = " << window_start_ts;
+      return false;
+    }
+    VLOG(2) << "spline_target_view_residuals_ solving window start ts was found. PreWindowBegin marker = " <<
+        spline_target_view_residuals_->FixedPointToString("PreWindowBegin");
+    
+    // Get timestamp for the earliest state that is part of this problem
+    auto starting_spline_target_view_residuals_fp = spline_target_view_residuals_->GetNextFixedPoint("PreProblemBegin");
+    auto ending_spline_target_view_residuals_fp = spline_target_view_residuals_->GetNextFixedPoint("PreWindowBegin");
+    int64_t constant_control_pose_begin_ts =     // constant states include this ts
+        spline_target_view_residuals_->ElementAtFixedPoint(starting_spline_target_view_residuals_fp).EarliestControlPoseTimestamp();
+    int64_t variable_control_pose_begin_ts =     // variable states begin here, constant states exclude this ts
+        spline_target_view_residuals_->ElementAtFixedPoint(ending_spline_target_view_residuals_fp).EarliestControlPoseTimestamp();
+    VLOG(1) << "Marking all control poses in range constant [" << constant_control_pose_begin_ts
+        << " " << variable_control_pose_begin_ts << ")";
+    
+    // Mark control poses constant from(including) constant_control_pose_begin_ts to(exculding) variable_control_pose_begin_ts
+    int32_t num_marked_constant = 0;
+    if (!cubic_pose_spline_->MarkControlPosesConstant(constant_control_pose_begin_ts,
+                                                      variable_control_pose_begin_ts,
+                                                      problem_.get(), &num_marked_constant)) {
+      LOG(ERROR) << "Could not mark control poses constant between ["
+          << constant_control_pose_begin_ts << " "
+          << variable_control_pose_begin_ts << ")";
+      return false;
+    }
+    iteration_record_.iteration_counters["SplineControlPosesMarked"] += num_marked_constant;
+    
+    return true;
+  }
+  
+  // Mark states in the problem before the solving window as constant
+  bool MarkStatesConstant0() {
     int64_t window_start_ts = swf_iterations_.SlidingWindowTimestamp();
     
     // Locate the PreWindowBegin marker for spline_pose_residuals_
@@ -970,17 +1447,31 @@ class CameraCalibrationTargetMotionFilter : public Model {
   
   bool AddNewDataToProblem() {
     
-    // spline_pose_residuals_
-    for (auto fp = spline_pose_residuals_->GetNextFixedPoint("ProblemEnd");
-         spline_pose_residuals_->IsNotPastTheEnd(fp); 
-         //spline_pose_residuals_->IsNotAtTheEnd(fp);   // Here we avoid last residual
-         spline_pose_residuals_->IncrementFixedPoint(fp)) {
-      spline_pose_residuals_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
+    //// spline_pose_residuals_
+    //for (auto fp = spline_pose_residuals_->GetNextFixedPoint("ProblemEnd");
+    //     spline_pose_residuals_->IsNotPastTheEnd(fp); 
+    //     //spline_pose_residuals_->IsNotAtTheEnd(fp);   // Here we avoid last residual
+    //     spline_pose_residuals_->IncrementFixedPoint(fp)) {
+    //  spline_pose_residuals_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
+    //  iteration_record_.iteration_counters["SplinePoseResidualsAdded"]++;
+    ///}
+    //// Reset the ProblemEnd marker
+    //spline_pose_residuals_->SetFixedPoint("ProblemEnd"); // Sets fixed point at the end
+    //VLOG(2) << "spline_pose_residuals problem end = " << spline_pose_residuals_->FixedPointToString("ProblemEnd");
+    
+    // spline_target_view_residuals_
+    for (auto fp = spline_target_view_residuals_->GetNextFixedPoint("ProblemEnd");
+         spline_target_view_residuals_->IsNotPastTheEnd(fp); 
+         //spline_target_view_residuals_->IsNotAtTheEnd(fp);   // Here we avoid last residual
+         spline_target_view_residuals_->IncrementFixedPoint(fp)) {
+      VLOG(1) << "spline_target_view_residuals_ fp for residual to be added: " << fp.ToString()
+          << " Address: " << spline_target_view_residuals_->MutableElementAtFixedPoint(fp);
+      spline_target_view_residuals_->MutableElementAtFixedPoint(fp)->AddToProblem(problem_.get());
       iteration_record_.iteration_counters["SplinePoseResidualsAdded"]++;
     }
     // Reset the ProblemEnd marker
-    spline_pose_residuals_->SetFixedPoint("ProblemEnd"); // Sets fixed point at the end
-    VLOG(2) << "spline_pose_residuals problem end = " << spline_pose_residuals_->FixedPointToString("ProblemEnd");
+    spline_target_view_residuals_->SetFixedPoint("ProblemEnd"); // Sets fixed point at the end
+    VLOG(2) << "spline_target_view_residuals problem end = " << spline_target_view_residuals_->FixedPointToString("ProblemEnd");
     
     // spline_pose_priors_
     for (auto fp = spline_pose_priors_->GetNextFixedPoint("ProblemEnd");
@@ -1021,8 +1512,19 @@ class CameraCalibrationTargetMotionFilter : public Model {
     cubic_pose_spline_->RecalculateControlPoses(&num_recalculated);
     iteration_record_.iteration_counters["SplineControlPosesRecalculated"] += num_recalculated;
     
-    if (!cubic_pose_spline_->ExtendSpline(iteration_end_ts)) {
-      LOG(FATAL) << "Could not extend cubic pose spline to ts " << iteration_end_ts;
+    // Extend the cubic spline till end of iteration ts
+    //if (!cubic_pose_spline_->ExtendSpline(iteration_end_ts)) {
+    //  LOG(FATAL) << "Could not extend cubic pose spline to ts " << iteration_end_ts;
+    ///}
+    
+    // Extend the cubic spline
+    int64_t extend_to_ts = max_iteration_observations_ts_;
+    if (extend_to_ts == 0) {
+      extend_to_ts = iteration_end_ts;
+      LOG(INFO) << "max_iteration_observations_ts_ == 0. So extending spline to iteration_end_ts";
+    }
+    if (!cubic_pose_spline_->ExtendSpline(extend_to_ts)) {
+      LOG(FATAL) << "Could not extend cubic pose spline to ts " << extend_to_ts;
     }
     
     return true;
@@ -1031,6 +1533,38 @@ class CameraCalibrationTargetMotionFilter : public Model {
   
   // Mark new states constant - after the previous solving window
   bool MarkNewStatesConstant() {
+    int64_t window_start_ts = swf_iterations_.SlidingWindowTimestamp();
+    
+    // Locate the PreWindowBegin marker for spline_target_view_residuals_
+    if (!spline_target_view_residuals_->PositionFixedPointBeforeTimestamp(
+          "PreWindowBegin", window_start_ts, true)) {
+      LOG(WARNING) << "Could not locate the window_start_ts for marking "
+          << "constant states in spline_target_view_residuals_ queue = " << window_start_ts;
+      return false;
+    }
+    VLOG(2) << "spline_target_view_residuals_ solving window start ts was found. PreWindowBegin marker = " <<
+        spline_target_view_residuals_->FixedPointToString("PreWindowBegin");
+    
+    // Get timestamp for the earliest state that is part of this problem
+    auto ending_spline_target_view_residuals_fp = spline_target_view_residuals_->GetNextFixedPoint("PreWindowBegin");
+    int64_t variable_control_pose_begin_ts =     // variable states begin here, constant states exclude this ts
+        spline_target_view_residuals_->ElementAtFixedPoint(ending_spline_target_view_residuals_fp).EarliestControlPoseTimestamp();
+    VLOG(1) << "Marking all control poses constant till " << variable_control_pose_begin_ts;        
+    
+    // Mark control poses constant till(exculding) variable_control_pose_begin_ts
+    int32_t num_marked_constant = 0;
+    if (!cubic_pose_spline_->MarkAdditionalControlPosesConstant(variable_control_pose_begin_ts,
+                                                      problem_.get(), &num_marked_constant)) {
+      LOG(ERROR) << "Could not mark control poses constant till " << variable_control_pose_begin_ts;
+      return false;
+    }
+    iteration_record_.iteration_counters["SplineControlPosesMarked"] += num_marked_constant;
+    
+    return true;
+  }
+  
+  // Mark new states constant - after the previous solving window
+  bool MarkNewStatesConstant0() {
     int64_t window_start_ts = swf_iterations_.SlidingWindowTimestamp();
     
     // Locate the PreWindowBegin marker for spline_pose_residuals_
@@ -1058,6 +1592,18 @@ class CameraCalibrationTargetMotionFilter : public Model {
     }
     iteration_record_.iteration_counters["SplineControlPosesMarked"] += num_marked_constant;
     
+    return true;
+  }
+  
+  bool Show() {
+    show_ = true;
+    display_.ShowWindow();
+    return true;
+  }
+  
+  bool Hide() {
+    show_ = false;
+    display_.HideWindow();
     return true;
   }
   

@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
   
   // Get filter configuration
   anantak::FilterConfig::Model model_config_;
-  std::string model_name_ = "Camera01.Intrinsics";
+  std::string model_name_ = "Camera00.Intrinsics";
   if (!filter_->GetModelConfiguration(model_name_, &model_config_)) {
     LOG(FATAL) << "Model '" << model_name_ << "' was not found in filter configuration";
     return -1;

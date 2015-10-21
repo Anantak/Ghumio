@@ -41,10 +41,9 @@ int main(int argc, char** argv) {
     return -1;
   }
   
-  
   // Get filter configuration
   anantak::FilterConfig::Model model_config_;
-  std::string model_name_ = "CameraCalibrationTargetMotionFilter.Camera00";
+  std::string model_name_ = "CameraCalibrationTargetMotionFilter.Camera01";
   if (!filter_->GetModelConfiguration(model_name_, &model_config_)) {
     LOG(FATAL) << "Model '" << model_name_ << "' was not found in filter configuration";
     return -1;
@@ -61,10 +60,13 @@ int main(int argc, char** argv) {
     "data/beacon_tags.pb.data",
   };
   
-  // Messages file reader
-  bool run_in_realtime = true;   // false: batch mode, true: realtime mode
+  // Options
+  const bool run_in_realtime = true;   // false: batch mode, true: realtime mode
+  const bool save_data_to_disk = false; // save data to disk for plotting
+  const bool publish_message = true;    // should a message be published for display
+  const bool use_ending_knot_time = true;
   
-  // File reader  
+  // Messages file reader
   anantak::FileMessagesKeeper file_msgs_keeper(msgs_filenames, run_in_realtime);
   if (!file_msgs_keeper.LoadAllMsgsFromFiles()) {
     LOG(ERROR) << "Could not load data, exiting.";
@@ -86,6 +88,7 @@ int main(int argc, char** argv) {
   // Create the filter
   anantak::CameraCalibrationTargetMotionFilter
       target_motion_filter(target_motion_filter_options, file_msgs_keeper.DataStartTime());
+  target_motion_filter.Show();
   
   // Timer to wait at end of each iteration when running in realtime mode
   float max_frequency = 0.;    // measure of how fast the filter is running
@@ -94,10 +97,10 @@ int main(int argc, char** argv) {
   // Results message to be transmitted
   anantak::SensorMsg kin_msg_;
   
-  //for (int i_iter=0; i_iter<1000; i_iter++) {
-  
   int i_iter=0;
   while (file_msgs_keeper.MoreDataLeft()) {
+  //while (i_iter<201) {
+    
     // Fetch new messages
     file_msgs_keeper.FetchNewMessages(iteration_interval, &new_msgs);
     
@@ -116,12 +119,24 @@ int main(int argc, char** argv) {
     // Send new messages to filter
     int64_t iteration_end_ts = file_msgs_keeper.CurrentDataTime();
     
+    // Look at the message timestamps
+    //std::cout << "  iteration end ts: " << iteration_end_ts << "\n";
+    //for (int i_file=0; i_file<new_msgs.size(); i_file++) {
+    //  for (int i_msg=0; i_msg<new_msgs.at(i_file)->size(); i_msg++) {
+    //    const anantak::SensorMsg _msg = new_msgs.at(i_file)->at(i_msg);
+    //    int64_t ts = _msg.header().timestamp();
+    //    std::cout << "    msg ts: " << ts << " diff: " << iteration_end_ts - ts << "\n";
+    //  }
+    ///}
+    
     // Process the readings
-    //    Save data to disk = !realtime, so saving only in batch mode. In realtime, we skip saving
-    target_motion_filter.RunIteration(iteration_end_ts, new_msgs, !run_in_realtime);
+    if (!target_motion_filter.RunIteration(iteration_end_ts, new_msgs,
+                                           save_data_to_disk, use_ending_knot_time)) {
+      LOG(ERROR) << "Could not run this iteration. Continuing.";
+    }
     
     // Transmit the results message
-    if (run_in_realtime) {
+    if (publish_message) {
       kin_msg_.Clear();
       target_motion_filter.GetResultsMessage(&kin_msg_);
       if (!filter_->PublishMessage(kin_msg_, model_config_.results_subject())) {

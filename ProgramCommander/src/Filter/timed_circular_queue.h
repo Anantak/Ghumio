@@ -122,6 +122,16 @@ class TimedCircularQueue {
     current_index_ = 0;
     oldest_index_ = 0;
     cycle_number_ = 0;
+    ClearTimestamps();
+    ResetFixedPoints();
+    return true;
+  }
+  
+  // Clear all queue timestamps
+  inline bool ClearTimestamps() {
+    for (int i=0; i<size_; i++) {
+      queue_[i].timestamp = 0;
+    }
     return true;
   }
   
@@ -308,6 +318,13 @@ class TimedCircularQueue {
   }
   
   // Nth last timestamp. First last = last. Second last = one before last. and so on.
+  inline TimedQueueElementType* NthLastQueueElementPtr(uint32_t n) {
+    if (n_msgs_ < n) return 0;
+    uint32_t q_idx = QueueIndex(n_msgs_-n);
+    return is_initiated_ ? &queue_.at(q_idx) : nullptr; 
+  }
+  
+  // Nth last timestamp. First last = last. Second last = one before last. and so on.
   inline int64_t NthLastTimestamp(uint32_t n) const {
     if (n_msgs_ < n) return 0;
     uint32_t q_idx = QueueIndex(n_msgs_-n);
@@ -335,10 +352,19 @@ class TimedCircularQueue {
       // Get the timestamp for this fixed point
       return std::to_string(cycle_number)+", "+std::to_string(element_index);
     }
+    inline bool Reset() {cycle_number=0; element_index=0;}
   };
   
   // Map of fixed points on this circular queue
   std::map<std::string, FixedPoint> fixed_points_;
+  
+  // Reset fixed points
+  inline bool ResetFixedPoints() {
+    for (auto it=fixed_points_.begin(); it!=fixed_points_.end(); it++) {
+      it->second.Reset();
+    }
+    return true;
+  }
   
   // Return a copy of the fixed point of current element in the queue
   inline FixedPoint CurrentFixedPoint() const {

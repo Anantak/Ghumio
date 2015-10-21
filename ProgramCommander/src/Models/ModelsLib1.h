@@ -118,6 +118,7 @@ typedef Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,1>> MapVectorXd;
 typedef Eigen::Map<Eigen::Matrix<double,1,1>> MapMatrix1d;
 typedef Eigen::Map<Eigen::Matrix<double,2,9>> MapMatrix2x9d;
 typedef Eigen::Map<Eigen::Matrix3d> MapMatrix3d;
+typedef Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>> MapMatrixXxYRowd;
 
 typedef Eigen::Map<const Eigen::Matrix<double,1,1>> MapConstVector1d;
 typedef Eigen::Map<const Eigen::Vector2d> MapConstVector2d;
@@ -131,7 +132,6 @@ typedef Eigen::Map<const Eigen::Matrix<double,18,1>> MapConstVector18d;
 typedef Eigen::Map<const Eigen::Matrix<double,19,1>> MapConstVector19d;
 typedef Eigen::Map<const Eigen::Matrix<double,20,1>> MapConstVector20d;
 typedef Eigen::Map<const Eigen::Matrix<double,Eigen::Dynamic,1>> MapConstVectorXd;
-
 
 typedef Eigen::Map<const Eigen::Matrix2d> MapConstMatrix2d;
 typedef Eigen::Map<const Eigen::Matrix3d> MapConstMatrix3d;
@@ -156,7 +156,9 @@ static const double kRadiansPerDegree = kPi/180.0;
 static const double kDegreesPerRadian = 180.0/kPi;
 
 static const double kEpsilon = Eigen::NumTraits<double>::epsilon();
-static const double kOneLessEpsilon = double(1) - kEpsilon;
+static const double kOnePluskEpsilon = double(1.) + kEpsilon;
+static const double kNegativeOnePluskEpsilon = -kOnePluskEpsilon;
+static const double kOneLessEpsilon = double(1.) - kEpsilon;
 static const Matrix3d kIdentity3d(Eigen::Matrix3d::Identity());
 static const Matrix6d kIdentity6d(Matrix6d::Identity());
 static const Matrix18d kIdentity18d(Matrix18d::Identity());
@@ -230,7 +232,7 @@ inline Quaterniond ErrorAngleAxisToQuaternion(const Vector3d& err, bool use_appr
 inline Vector3d QuaternionToErrorAngleAxis(Quaterniond& q, bool use_exact=false) {
   Vector3d aa;
   double w = q.w();
-  if (w<-1. || w>1.) {
+  if (w<kNegativeOnePluskEpsilon || w>kOnePluskEpsilon) {
     LOG(WARNING) << "Normalized the quaternion. Should not be needed. " << q.coeffs().transpose();
     q.normalize();
   }
@@ -424,6 +426,7 @@ class Point1dState {
   double Value() const {return state_(0);}
   double Error() const {return error_(0);}
   double Var() const {return covariance_(0);}
+  bool IsZero() const {return (std::abs(state_(0)+error_(0)) < kEpsilon);}
   
   std::string ToString(int detail=0) const {
     std::ostringstream ss;
@@ -736,14 +739,17 @@ class PoseState {
   }
   
   // Helper to add a point to this pose
-  inline bool AddPoint(const Vector3d& point, Vector3d* add_point,
-                       Matrix3x6d* jac, Matrix3d* add_jac) const {
+  //  Maths in Notebook #6 pg 67
+  inline bool AddPoint(const Vector3d& point,   // point is in pose frame
+                       Vector3d* add_point,     // add_point is in reference frame of the pose
+                       Matrix3x6d* jac, Matrix3d* add_jac  // Errors are in reference frame of pose
+  ) const {
     Vector3d WApB = R_.transpose()*point;
     if (add_point) {
       (*add_point) = p_ + WApB;
     }
     if (jac) {
-      jac->block<3,3>(0,0) = -SkewSymm3d(WApB);
+      jac->block<3,3>(0,0) = SkewSymm3d(WApB);    // Notice no negative sign here
       jac->block<3,3>(0,3) = kIdentity3d;
     }
     if (add_jac) {
@@ -3194,7 +3200,7 @@ class PinholeIntrinsicsState {
   inline bool ProjectPoint(const Vector3d& CpF, Vector2d* uvim,
                     Matrix2x3d* duvim_dCpF, Matrix2x9d* duvim_dintrinsics) const {
     // Negative or zero depth is not allowed
-    if (CpF(2) <= kEpsilon) {LOG(ERROR) << "CpF(2) <= kEpsilon."; return false;}
+    if (CpF(2) <= kEpsilon) {LOG(ERROR) << "CpF(2) <= kEpsilon. " << CpF(2); return false;}
     if (!uvim) {LOG(ERROR) << "uvim is NULL."; return false;}
     
     Matrix2d fxfy; fxfy << Kv_(0), 0., 0., Kv_(1);
@@ -5942,6 +5948,19 @@ class NonUniformLinearPoseSpline {
     p0_ = p1_ = nullptr;
   }
   
+  bool Reset() {
+    for (int i=0; i<control_poses_->n_msgs(); i++) {
+      PoseState* pose = control_poses_->AtPtr(i);
+      pose->SetZero();
+    }
+    control_poses_->Clear();
+    segment_marker_.Reset();
+    starting_ts_ = 0;
+    ending_ts_ = 0;
+    p0_ = p1_ = nullptr;
+    return true;
+  }
+  
   inline int64_t StartingTimestamp() const {return starting_ts_;}
   inline int64_t EndingTimestamp() const {return ending_ts_;}
   inline int32_t NumControlPoints() const {return control_poses_->n_msgs();}
@@ -6159,6 +6178,8 @@ class PoseSpline_ControlPosePrior : public ceres::SizedCostFunction<6, 6> {
   bool AddToProblem(ceres::Problem *problem, ceres::LossFunction* loss_func = nullptr) {
     // Check integrity of data
     if (!P0_) {LOG(ERROR) << "!P0_"; return false;}
+    
+    VLOG(2) << "ControlPosePrior: Problem has " << problem->NumResidualBlocks() << " residual blocks.";
     
     // Add this residual to problem
     ceres::CostFunction* cf = this;
@@ -6498,10 +6519,10 @@ class UniformCubicPoseSpline {
   Matrix4d M4_;       // Cubic spline basis matrix. Using K.Qin terminology.
   Matrix4d CB4_;      // Cubic spline cummulative basis matrix.
   
-  PoseState* p3_;     // P[i-3] pose state in control poses queue
-  PoseState* p2_;     // P[i-2] pose state 
-  PoseState* p1_;     // P[i-1] pose state 
   PoseState* p0_;     // P[i] pose state 
+  PoseState* p1_;     // P[i-1] pose state 
+  PoseState* p2_;     // P[i-2] pose state 
+  PoseState* p3_;     // P[i-3] pose state in control poses queue
   
   double recip_dt_, recip_dtdt_;
   
@@ -6540,21 +6561,27 @@ class UniformCubicPoseSpline {
     p3_ = p2_ = p1_ = p0_ = nullptr;
   }
   
-  // Remove all control poses
+  // Reset the spline
   bool Reset() {
-    int32_t n = control_poses_->n_msgs();
-    for (int i=0; i<n; i++) {
-      PoseState* pose = control_poses_->NthLastElementPtr(1);
+    for (int i=0; i<control_poses_->n_msgs(); i++) {
+      PoseState* pose = control_poses_->AtPtr(i);
       pose->SetZero();
-      control_poses_->decrement();
     }
+    control_poses_->Clear();
+    segment_marker_.Reset();
+    prior_marker_.Reset();
+    control_poses_->GetFixedPoint("ConstantBegin").Reset();
+    control_poses_->GetFixedPoint("VariableBegin").Reset();
     ending_ts_ = 0;
     starting_ts_ = 0;
+    p3_ = p2_ = p1_ = p0_ = nullptr;
     return true;
   }
   
   inline int64_t StartingTimestamp() const {return starting_ts_;}
   inline int64_t EndingTimestamp() const {return ending_ts_;}
+  inline int64_t CurrentStartingTimestamp() const {return control_poses_->FirstTimestamp()+3*dts_;}
+  inline int64_t CurrentEndingTimestamp() const {return ending_ts_;}
   inline int32_t NumControlPoints() const {return control_poses_->n_msgs();}
   inline int64_t KnotDistance() const {return dts_;}
   
@@ -6687,6 +6714,11 @@ class UniformCubicPoseSpline {
     return true;
   }
   
+  // Set control pose pointers
+  inline bool GetControlPoses(PoseState** p0, PoseState** p1, PoseState** p2, PoseState** p3) const {
+    *p0 = p0_; *p1 = p1_; *p2 = p2_; *p3 = p3_;
+    return true;
+  }
   
   // Calculate pose, velocity and accelerations using last four control poses
   //  Maths in Notebook #6 pg 38
@@ -6849,6 +6881,42 @@ class UniformCubicPoseSpline {
     return true;
   }
   
+  // Initiate spline with a single pose
+  inline bool InitiateSpline(const PoseState& obs0) {
+    
+    // Spline control pose [i] timestamp
+    int64_t ts0 = obs0.Timestamp();
+    int64_t ts_0 = (ts0 / dts_) * dts_;   // [i]
+    
+    // Velocities are zero
+    
+    // Interpolated pose [i]
+    Quaterniond q0 = obs0.Q();
+    Vector3d p0 = obs0.P();
+    
+    // How many poses are needed to cover the second timestamp?
+    VLOG(2) << "Initiating the cubic pose spline by creating " << 4
+        << " control poses. First interpolation interval ts: " << ts_0;
+    
+    // Add starting control poses to spline
+    for (int i=0; i<4; i++) {
+      int64_t ts = ts_0 + (-3+i)*dts_;
+      Quaterniond q = q0;
+      Vector3d p = p0;
+      PoseState* pose = control_poses_->NextMutableElement();
+      pose->SetZero();
+      pose->SetTimestamp(ts);
+      pose->SetPose(q,p);
+      control_poses_->SetTimestamp(ts);
+      VLOG(1) << "Added control pose " << i << " " << pose->ToString();
+    }
+    
+    starting_ts_ = ts_0;
+    ending_ts_ = control_poses_->LastTimestamp();
+    
+    return true;
+  }
+  
   // Initiate spline with two starting poses
   //  Create first four control points using a line connecting two observations
   inline bool InitiateSpline(const PoseState& obs0, const PoseState& obs1) {
@@ -6873,7 +6941,7 @@ class UniformCubicPoseSpline {
     // How many poses are needed to cover the second timestamp?
     const int64_t end_ts = (ts1 / dts_) * dts_;
     const int32_t num_extra_poses_to_create = (end_ts - ts_0) / dts_;
-    VLOG(2) << "Initiating the spline by creating " << 4+num_extra_poses_to_create
+    VLOG(2) << "Initiating the cubic pose spline by creating " << 4+num_extra_poses_to_create
         << " control poses. First interpolation interval ts: " << ts_0;
     
     // Add starting control poses to spline
@@ -6903,7 +6971,7 @@ class UniformCubicPoseSpline {
     const int64_t ts_0 = control_poses_->LastTimestamp();   // current timestamp [i]
     const int64_t end_ts = (ts / dts_) * dts_;
     const int32_t num_new_poses_to_create = (end_ts - ts_0) / dts_;
-    VLOG(2) << "Extending the spline by creating " << num_new_poses_to_create
+    VLOG(1) << "Extending the spline by creating " << num_new_poses_to_create
         << " new control poses. " << ts_0 << " to " << end_ts << " ("<<end_ts-ts_0<<") " << ts;
     
     if (num_new_poses_to_create==0) return true;
@@ -6913,11 +6981,17 @@ class UniformCubicPoseSpline {
       const PoseState& P0 = control_poses_->NthLastElement(1);
       const PoseState& P1 = control_poses_->NthLastElement(2);
       int64_t ts = P0.Timestamp() + dts_;
-      Quaterniond dq = P0.Q() * P1.Q().conjugate();
-      Vector3d dp = P0.P() - P1.P();
-      Quaterniond q = dq * P0.Q();
-      //Quaterniond q = P0.Q();
-      Vector3d p = P0.P() + dp;
+      // Extend spline as line joining last two control poses - if last estimate is poor, this is poor
+      //Quaterniond dq = P0.Q() * P1.Q().conjugate();
+      //Vector3d dp = P0.P() - P1.P();
+      //Quaterniond q = dq * P0.Q();  // Extend spline by using last omega. If angular pose is noisy this is unstable.
+      //Vector3d p = P0.P() + dp;
+      // Extend spline by copying last pose - if last estimate is poor, this is poor too
+      //Quaterniond q = P0.Q();   // Extend spline assuming zero omega. If angular pose is noisy, this is better.
+      //Vector3d p = P0.P();
+      // Extend spline by copying second last pose - if last estimate is poor, this would do better
+      Quaterniond q = P1.Q();
+      Vector3d p = P1.P();
       PoseState* pose = control_poses_->NextMutableElement();
       pose->SetZero();
       pose->SetTimestamp(ts);
@@ -7063,6 +7137,632 @@ class UniformCubicPoseSpline {
   }
   
 }; // Uniform cubic pose spline
+
+
+// Target view residual using the uniform cubic pose spline
+class PoseSpline_CalibrationTargetViewResidual : public ceres::CostFunction {
+ public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
+  static const int kMaxNumberOfResiduals = 280; // = 2*4*35. 35 tags, 4 corners and 2 indices
+  
+  struct Options {
+    bool solve_for_intrinsics;  // default false. Solve for camera intrinsics?
+    bool solve_for_extrinsics;  // default false. Solve for camera pose?
+    bool solve_for_timedelay;   // default false. Solve for camera timedelay?
+    
+    double image_sigma;         // sigma of the corner seen in image. In pixels.
+    Matrix2d image_corner_covariance; // Covariance matrix for tag corner view.
+    
+    Options(const double im_sigma = 1.,
+            const bool si = false,
+            const bool se = false,
+            const bool st = false):
+        image_sigma(im_sigma),        // in pixels
+        solve_for_intrinsics(si),
+        solve_for_extrinsics(se),
+        solve_for_timedelay(st) {
+      image_corner_covariance = image_sigma*image_sigma*Matrix2d::Identity();
+    }
+  };
+  
+  // Options
+  const PoseSpline_Options*   pose_spline_options_;
+  const PoseSpline_CalibrationTargetViewResidual::Options*  options_;
+  
+  // Observation
+  int64_t           timestamp_;         // Timestamp of the observation
+  PoseState         target_pose_est_;   // This is the starting target pose from spline
+  PoseState         observation_;       // Approximate pose estimate from the observation
+  
+  // Calibration target
+  const CameraCalibrationTarget* target_;
+  
+  // State: Cubic pose spline
+  UniformCubicPoseSpline*   cubic_pose_spline_;     // Cubic pose spline
+  PoseState*    p0_;     // P[i] pose state 
+  PoseState*    p1_;     // P[i-1] pose state 
+  PoseState*    p2_;     // P[i-2] pose state 
+  PoseState*    p3_;     // P[i-3] pose state in control poses queue
+  
+  // State: Camera
+  const UndistortedCamera*  undistorted_camera_;   // Undistorting camera based off of camera_
+  CameraState*              camera_;  // Holds intrinsics, extrisics and time delay of the camera
+  
+  // Residual and Jacobians
+  int32_t
+      num_residuals_;   // Number of corners seen * 2 (dimensions)
+  Eigen::Matrix<double,Eigen::Dynamic,1,0,kMaxNumberOfResiduals,1>
+      residual_;        // Starting residual
+  Eigen::Matrix<double,Eigen::Dynamic,6,0,kMaxNumberOfResiduals,6>
+      dcorner_dp0_;     // Jacobian of corner observation by spline pose[i]
+  Eigen::Matrix<double,Eigen::Dynamic,6,0,kMaxNumberOfResiduals,6>
+      dcorner_dp1_;     // Jacobian of corner observation by spline pose[i-1]
+  Eigen::Matrix<double,Eigen::Dynamic,6,0,kMaxNumberOfResiduals,6>
+      dcorner_dp2_;     // Jacobian of corner observation by spline pose[i-2]
+  Eigen::Matrix<double,Eigen::Dynamic,6,0,kMaxNumberOfResiduals,6>
+      dcorner_dp3_;     // Jacobian of corner observation by spline pose[i-3]
+  
+  //Eigen::Matrix<double,Eigen::Dynamic,9,0,kMaxNumberOfResiduals,9>
+  //    dcorner_dintrinsics_; // Jacobian of corners with camera instrinsics
+  //Eigen::Matrix<double,Eigen::Dynamic,6,0,kMaxNumberOfResiduals,6>
+  //    dcorner_dextrinsics_; // Jacobian of corners with camera extrinsics
+  //Eigen::Matrix<double,Eigen::Dynamic,1,0,kMaxNumberOfResiduals,1>
+  //    dcorner_dtimedelay_; // Jacobian of corners with camera time delay
+  
+  PoseSpline_CalibrationTargetViewResidual(
+      const PoseSpline_Options*  pose_spline_options,
+      const PoseSpline_CalibrationTargetViewResidual::Options*  options) {
+    SetOptions(pose_spline_options, options);
+    Reset();
+  }
+  
+  bool SetOptions(
+      const PoseSpline_Options*  pose_spline_options,
+      const PoseSpline_CalibrationTargetViewResidual::Options*  options) {
+    if (!pose_spline_options) {LOG(FATAL) << "pose_spline_options pointer is null";}
+    if (!options) {LOG(FATAL) << "options pointer is null";}
+    pose_spline_options_ = pose_spline_options;
+    options_ = options;
+  }
+  
+  bool Reset() {    // options_ is not reset
+    timestamp_ = 0; target_pose_est_.SetZero();
+    target_ = nullptr; cubic_pose_spline_ = nullptr;
+    p3_ = nullptr; p2_ = nullptr; p1_ = nullptr; p0_ = nullptr;
+    undistorted_camera_ = nullptr; camera_ = nullptr;
+    num_residuals_ = 0;
+    residual_.setZero();
+    dcorner_dp3_.setZero(); dcorner_dp2_.setZero(); dcorner_dp1_.setZero(); dcorner_dp0_.setZero();
+    // Set the members of the cost function
+    set_num_residuals(0);
+    mutable_parameter_block_sizes()->clear();
+  }
+  
+  PoseSpline_CalibrationTargetViewResidual(const PoseSpline_CalibrationTargetViewResidual& r):
+    pose_spline_options_(r.pose_spline_options_), options_(r.options_),
+    timestamp_(r.timestamp_), target_pose_est_(r.target_pose_est_),
+    target_(r.target_), cubic_pose_spline_(r.cubic_pose_spline_),
+    p3_(r.p3_), p2_(r.p2_), p1_(r.p1_), p0_(r.p0_),
+    undistorted_camera_(r.undistorted_camera_), camera_(r.camera_),
+    num_residuals_(r.num_residuals_), residual_(r.residual_),
+    dcorner_dp3_(r.dcorner_dp3_), dcorner_dp2_(r.dcorner_dp2_),
+    dcorner_dp1_(r.dcorner_dp1_), dcorner_dp0_(r.dcorner_dp0_)
+  { set_num_residuals(r.num_residuals());
+    *mutable_parameter_block_sizes() = r.parameter_block_sizes();
+  }
+  
+  PoseSpline_CalibrationTargetViewResidual& operator= (const PoseSpline_CalibrationTargetViewResidual& r) {
+    pose_spline_options_=r.pose_spline_options_; options_=r.options_;
+    timestamp_=r.timestamp_; target_pose_est_=r.target_pose_est_;
+    target_=r.target_; cubic_pose_spline_=r.cubic_pose_spline_;
+    p3_=r.p3_; p2_=r.p2_; p1_=r.p1_; p0_=r.p0_;
+    undistorted_camera_=r.undistorted_camera_; camera_=r.camera_;
+    num_residuals_=r.num_residuals_; residual_=r.residual_;
+    dcorner_dp3_=r.dcorner_dp3_; dcorner_dp2_=r.dcorner_dp2_;
+    dcorner_dp1_=r.dcorner_dp1_; dcorner_dp0_=r.dcorner_dp0_;
+    set_num_residuals(r.num_residuals());
+    *mutable_parameter_block_sizes() = r.parameter_block_sizes();
+  }
+  
+  virtual ~PoseSpline_CalibrationTargetViewResidual() {}
+  
+  // Create residual using target pose state and camera state
+  bool Create(const SensorMsg& message,
+              const CameraCalibrationTarget* target,
+              const UndistortedCamera* undist_camera,
+              UniformCubicPoseSpline* spline,
+              CameraState* camera,
+              cv::Mat* plot_image = nullptr) {
+    // Checks
+    if (!message.has_header()) {LOG(ERROR)<<"Message has no header"; return false;}
+    if (!message.has_april_msg()) {LOG(ERROR)<<"Message has no aprilag message"; return false;}
+    if (!target) {LOG(ERROR)<<"Calibration target is null"; return false;}
+    if (!undist_camera) {LOG(ERROR)<<"Undistortion camera is null"; return false;}
+    if (!spline) {LOG(ERROR)<<"Spline is null"; return false;}
+    if (!camera) {LOG(ERROR)<<"Camera is null"; return false;}
+    if (camera->intrinsics_.IsZero()) {LOG(WARNING)<<"camera is zero";}
+    if (parameter_block_sizes().size() > 0) {
+      LOG(FATAL) << "Number of parameters blocks > 0. Got: " << parameter_block_sizes().size();
+    }
+    
+    target_ = target;
+    undistorted_camera_ = undist_camera;
+    cubic_pose_spline_ = spline;
+    camera_ = camera;
+    timestamp_ = message.header().timestamp();
+    
+    target_pose_est_.SetZero();
+    observation_.SetZero();
+    p0_ = p1_ = p2_ = p3_ = nullptr;
+    
+    // Calculate target pose if undistorted camera has been provided
+    if (undistorted_camera_) {
+      VLOG(2) << "Calculating approximate target pose";
+      anantak::AprilTagMessage undist_apriltag_msg;
+      undistorted_camera_->Undistort(message.april_msg(), &undist_apriltag_msg);
+      if (!target_->CalculateTargetPose(undist_apriltag_msg, undistorted_camera_->camera_,
+                                        &observation_, timestamp_)) {
+        LOG(WARNING) << "Could not calculate target pose";
+      }
+    }
+    
+    if (!CalculateResiduals(message, plot_image)) {
+      LOG(ERROR) << "Could not calculate residuals and jacobians";
+      return false;
+    }
+    
+    return true;
+  }
+  
+  // Calculate residuals, jacobians and variances.
+  //  Jacobians use first estimates. Residual is recalculated over time but jacobians never change.
+  bool CalculateResiduals(const SensorMsg& message,
+                          cv::Mat* plot_image = nullptr) {
+    
+    // Target frame = T,  Camera frame = C,  Corner on target = F
+    // Target pose in camera frame = CPT
+    // Corner position in target frame = TpF
+    // Corner position in camera frame = CpF
+    
+    // Non-zero camera pose is not implemented yet
+    if (!camera_->Pose().IsZero()) {
+      LOG(ERROR) << "Non zero camera pose is not implemented yet."; return false;
+    }
+    if (!camera_->TimeDelay().IsZero()) {
+      LOG(ERROR) << "Non zero camera time delay is not implemented yet."; return false;
+    }
+    
+    // Predict the camera pose using spline
+    Quaterniond  TqC;        // Rotation of target in camera frame
+    Vector3d     CpT;        // Position of target in camera frame
+    PoseState    CPT;        // Target pose in camera frame
+    Matrix3x12d  CdqT_Pidq;  // Jacobian of target rotation wrt control poses' rotation
+    Matrix3x12d  CdpT_Pidp;  // Jacobian of target position wrt control poses' position
+    bool use_latest_estimates = false;  // Using first estimates. This keeps estimator consistent
+    //bool use_latest_estimates = true; // Using lastest estimates would make the estimator inconsistent ** CHECK **
+    VLOG(2) << "Calculating spline pose and derivatives";
+    if (!cubic_pose_spline_->CalculatePoseAndDerivatives(
+          timestamp_,
+          &TqC, &CpT, &CdqT_Pidq, &CdpT_Pidp,
+          nullptr, nullptr, nullptr, nullptr,
+          nullptr, nullptr, nullptr, nullptr,
+          use_latest_estimates
+        )) {
+      LOG(ERROR) << "Could not interpolate pose using spline. ts " << timestamp_;
+      return false;
+    }
+    CPT.SetTimestamp(timestamp_);
+    CPT.SetPose(TqC, CpT);
+    target_pose_est_ = CPT;
+    VLOG(2) << "Starting target pose: " << CPT.ToString();
+    
+    // Get the control pose pointers
+    if (!cubic_pose_spline_->GetControlPoses(&p0_, &p1_, &p2_, &p3_)) {
+      LOG(ERROR) << "Could not get control pose pointers from cubic spline";
+      return false;
+    }
+    if (!p0_ || !p1_ || !p2_ || !p3_) {LOG(FATAL) << "Some or all control pose pointers are null";}
+    
+    // How many tags were seen? 
+    const AprilTagMessage& apriltag_msg = message.april_msg();
+    if (apriltag_msg.tag_id_size() == 0) {LOG(ERROR)<<"num_tags seen == 0"; return false;}
+    
+    // Resize residual and jacobian stores to maximum size seen in image
+    int32_t max_rows = apriltag_msg.tag_id_size()*2*4;  // 4 corners per tag, 2 indices per corner
+    residual_.resize(max_rows, 1); residual_.setZero();
+    dcorner_dp0_.resize(max_rows, 6); dcorner_dp0_.setZero();
+    dcorner_dp1_.resize(max_rows, 6); dcorner_dp1_.setZero();
+    dcorner_dp2_.resize(max_rows, 6); dcorner_dp2_.setZero();
+    dcorner_dp3_.resize(max_rows, 6); dcorner_dp3_.setZero();
+    //VLOG(2) << "Saw " << apriltag_msg.tag_id_size() << " tags";
+    
+    //dcorner_dintrinsics_.resize(max_rows, 9); dcorner_dintrinsics_.setZero();
+    //dcorner_dextrinsics_.resize(max_rows, 6); dcorner_dextrinsics_.setZero();
+    //dcorner_dtimedelay_.resize(max_rows, 1); dcorner_dtimedelay_.setZero();
+    
+    int32_t num_tags = 0;
+    int32_t num_corners = 0;
+    
+    double avg_corner_error = 0.;
+    
+    // Go through each tag to build up the residuals
+    for (int i_tag=0; i_tag<apriltag_msg.tag_id_size(); i_tag++) {
+      
+      const std::string& tag_id = apriltag_msg.tag_id(i_tag);
+      
+      // Does this tag belong to the calibration target?
+      if (!target_->TagIsPresent(tag_id)) {
+        LOG(WARNING) << "Saw a tag not on target " << tag_id << ". Skipping it.";
+        continue;
+      }
+      //VLOG(2) << "Building residuals and jacobian for tag " << tag_id;
+      
+      // Extract the tag corners seen in image
+      Matrix2x4d image_coords, projected_coords;
+      ExtractAprilTag2dCorners(apriltag_msg, i_tag, &image_coords);
+      
+      // Corners in target reference frame
+      const Matrix3x4d& tag_corners = target_->TagCorners(tag_id);
+      
+      // Create a residual for each corner
+      for (int i_crnr = 0; i_crnr<4; i_crnr++) {
+        
+        // Position of this corner wrt target
+        const Vector3d TpF(tag_corners.col(i_crnr));
+        
+        // Position of this corner in camera frame
+        Vector3d    CpF; CpF.setZero();
+        Matrix3x6d  dCpF_dCPT; dCpF_dCPT.setZero();
+        Matrix3d    dCpF_dTpF; dCpF_dTpF.setZero();
+        if (!CPT.AddPoint(TpF, &CpF, &dCpF_dCPT, &dCpF_dTpF)) {
+          LOG(FATAL) << "Could not add point. TpF: " << TpF.transpose() << " CpF: " << CpF.transpose();
+          return false;
+        }
+        //VLOG(2) << "  Corner 3d coordinates in camera: " << CpF.transpose();
+        
+        // Projection of this point on camera image
+        Vector2d uv; uv.setZero();
+        Matrix2x3d duv_dCpF; duv_dCpF.setZero();
+        if (!camera_->Intrinsics().ProjectPoint(CpF, &uv, &duv_dCpF, nullptr)) {
+          LOG(FATAL) << "Could not project point. CpF: " << CpF.transpose();
+          return false;          
+        }
+        //Matrix2x9d duv_dintrinsics; duv_dintrinsics.setZero(); 
+        //camera_->Intrinsics().ProjectPoint(CpF, &uv, &duv_dCpF, &duv_dintrinsics);
+        //VLOG(2) << "  Projected corner image coords: " << uv.transpose();
+        
+        // Jacobians of projection wrt predicted pose, intrinsics, extrinsics, time delay
+        Matrix2x6d  duv_dCPT = duv_dCpF * dCpF_dCPT;
+        Matrix2x3d  duv_dTpF = duv_dCpF * dCpF_dTpF;
+        //Vector2d    duv_dtd  = duv_dCPT * dCPT_dtd;
+        
+        // Jacobians of projection wrt spline control poses
+        Matrix6d dCPT_dP0; dCPT_dP0.setZero();
+        dCPT_dP0.block<3,3>(0,0) = CdqT_Pidq.block<3,3>(0,0);
+        dCPT_dP0.block<3,3>(3,3) = CdpT_Pidp.block<3,3>(0,0);
+        Matrix2x6d  duv_dP0 = duv_dCPT * dCPT_dP0;
+        
+        Matrix6d dCPT_dP1; dCPT_dP1.setZero();
+        dCPT_dP1.block<3,3>(0,0) = CdqT_Pidq.block<3,3>(0,3);
+        dCPT_dP1.block<3,3>(3,3) = CdpT_Pidp.block<3,3>(0,3);
+        Matrix2x6d  duv_dP1 = duv_dCPT * dCPT_dP1;
+        
+        Matrix6d dCPT_dP2; dCPT_dP2.setZero();
+        dCPT_dP2.block<3,3>(0,0) = CdqT_Pidq.block<3,3>(0,6);
+        dCPT_dP2.block<3,3>(3,3) = CdpT_Pidp.block<3,3>(0,6);
+        Matrix2x6d  duv_dP2 = duv_dCPT * dCPT_dP2;
+        
+        Matrix6d dCPT_dP3; dCPT_dP3.setZero();
+        dCPT_dP3.block<3,3>(0,0) = CdqT_Pidq.block<3,3>(0,9);        
+        dCPT_dP3.block<3,3>(3,3) = CdpT_Pidp.block<3,3>(0,9);
+        Matrix2x6d  duv_dP3 = duv_dCPT * dCPT_dP3;
+        
+        // Calculate starting residual
+        Vector2d resid = uv - image_coords.col(i_crnr);
+        projected_coords.col(i_crnr) = uv;
+        avg_corner_error += resid.squaredNorm();
+        //VLOG(2) << "  Seen image coordinates: " << image_coords.col(i_crnr).transpose();
+        
+        // Calculate covariance of the residual
+        Matrix2d var_resid =
+            options_->image_corner_covariance
+            + duv_dTpF * target_->CornerPositionCovariance() * duv_dTpF.transpose() // Noise in knkowledge of target
+            + duv_dCPT * pose_spline_options_->pose_covariance_ * duv_dCPT.transpose(); // Noise in spline trajectory model
+        //VLOG(2) << "  residual variance: " << var_resid.row(0) << "  " << var_resid.row(1);
+        
+        //// Add variance due to intrinsics uncertainty if we are not solving for them
+        //if (!options_->solve_for_intrinsics) {
+        //  var_resid +=
+        //    duv_dintrinsics * camera_->Intrinsics().covariance_ * duv_dintrinsics.transpose();
+        ///}
+        
+        // Add variance due extrinsics uncertainty if we are not solving for them
+        //if (!options_->solve_for_extrinsics) {
+        //  var_resid +=
+        //    duv_dextrinsics * camera_->Extrinsics().covariance_ * duv_dextrinsics.transpose();
+        ///}
+        
+        //// Add variance due to timedelay uncertainty if we are not solving for it
+        //if (!options_->solve_for_timedelay) {
+        //  var_resid +=
+        //    duv_dtd * camera_->TimeDelay().covariance_ * duv_dtd.transpose();
+        ///}
+        
+        // Calculate inverse sqrt covariance
+        Matrix2d inv_sqrt_cov; Vector2d sqrt_var;
+        if (!InverseSqrt(var_resid, &inv_sqrt_cov, &sqrt_var)) {
+          LOG(ERROR) << "Could not calculate inv sqrt mat";
+          continue;
+        }
+        
+        // Report calculations
+        if (i_tag<5 && i_crnr==0) {
+          VLOG(2) << "proj, seen, resid = " << " " << uv.transpose() << ",  "
+              << image_coords.col(i_crnr).transpose() << ",  " << resid.transpose()
+              << ", sqrt cov: " << sqrt_var.transpose() << ", rho: " << var_resid(0,1)/sqrt_var(0)/sqrt_var(1);
+          //VLOG(1) << "inv_sqrt_cov: " << inv_sqrt_cov.row(0) << " " << inv_sqrt_cov.row(1);
+        }
+        
+        // Normalize the residuals and Jacobians to create independent gaussians
+        resid = inv_sqrt_cov * resid;
+        duv_dP0 = inv_sqrt_cov * duv_dP0;
+        duv_dP1 = inv_sqrt_cov * duv_dP1;
+        duv_dP2 = inv_sqrt_cov * duv_dP2;
+        duv_dP3 = inv_sqrt_cov * duv_dP3;
+        //duv_dintrinsics = inv_sqrt_cov * duv_dintrinsics;
+        //duv_dextrinsics = inv_sqrt_cov * duv_dextrinsics;
+        //duv_dtd = inv_sqrt_cov * duv_dtd;
+        
+        // Check if there are any NANs in the calculations
+        if (!resid.allFinite()
+            || !duv_dP0.allFinite() || !duv_dP1.allFinite()
+            || !duv_dP2.allFinite() || !duv_dP3.allFinite()
+            //|| !duv_dintrinsics.allFinite() || !duv_dtd.allFinite()
+        ) {
+          LOG(ERROR) << "Found non finite values in residual or jacobians";
+          LOG(ERROR) << "resid = " << resid.transpose();
+          LOG(ERROR) << "duv_dP0 = \n" << duv_dP0;
+          LOG(ERROR) << "duv_dP1 = \n" << duv_dP1;
+          LOG(ERROR) << "duv_dP2 = \n" << duv_dP2;
+          LOG(ERROR) << "duv_dP3 = \n" << duv_dP3;
+          //LOG(ERROR) << "duv_dintrinsics = \n" << duv_dintrinsics;
+          //LOG(ERROR) << "duv_dtd = \n" << duv_dtd;
+          continue;
+        }
+        
+        // Append the corner residual to the cost function residual
+        residual_.block<2,1>(2*num_corners,0) = resid;
+        dcorner_dp0_.block<2,6>(2*num_corners,0) = duv_dP0;
+        dcorner_dp1_.block<2,6>(2*num_corners,0) = duv_dP1;
+        dcorner_dp2_.block<2,6>(2*num_corners,0) = duv_dP2;
+        dcorner_dp3_.block<2,6>(2*num_corners,0) = duv_dP3;
+        //dcorner_dintrinsics_.block<2,9>(2*num_corners,0) = duv_dintrinsics;
+        //dcorner_dextrinsics_.block<2,6>(2*num_corners,0) = duv_dextrinsics;
+        //dcorner_dtimedelay_.block<2,1>(2*num_corners,0) = duv_dtd;
+        
+        num_corners++;
+        
+      } // for all four corners
+      
+      // Plot the tag on the image
+      if (plot_image) {
+        PlotTagOnImage(image_coords, CV_WHITE, plot_image);
+        PlotTagOnImage(projected_coords, CV_RED, plot_image);
+      }
+      
+      // All was good, so increment the number of tags seen
+      num_tags++;
+      
+    }   // for all tags
+    avg_corner_error /= num_corners; avg_corner_error = std::sqrt(avg_corner_error);
+    VLOG(1) << "Used " << num_tags << " of " << apriltag_msg.tag_id_size() << " tags seen. "
+        << " num corners: " << num_corners << " (should be " << num_tags*4 << ") "
+        << " avg corner error: " << avg_corner_error;
+    
+    num_residuals_ = 2*num_corners;
+    
+    // Resize the residual and jacobians keeping calculated values if needed
+    if (num_residuals_ < max_rows) {
+      residual_.conservativeResize(num_residuals_, Eigen::NoChange);
+      dcorner_dp0_.conservativeResize(num_residuals_, Eigen::NoChange);
+      dcorner_dp1_.conservativeResize(num_residuals_, Eigen::NoChange);
+      dcorner_dp2_.conservativeResize(num_residuals_, Eigen::NoChange);
+      dcorner_dp3_.conservativeResize(num_residuals_, Eigen::NoChange);
+      //dcorner_dintrinsics_.conservativeResize(num_residuals_, Eigen::NoChange);
+      //dcorner_dextrinsics_.conservativeResize(num_residuals_, Eigen::NoChange);
+      //dcorner_dtimedelay_.conservativeResize(num_residuals_, Eigen::NoChange);
+      VLOG(1) << "Resized residuals/jacobians from " << max_rows << " to " << num_residuals_;
+    }
+    
+    // Set number of residuals for solver
+    set_num_residuals(num_residuals_);
+    VLOG(1) << "Set number of residuals for solver: " << num_residuals_;
+    
+    // Set parameter block sizes for solver - camera intrinsics, extrinsics, timedelay
+    mutable_parameter_block_sizes()->push_back(6);    // Control pose i has 6 parameters
+    mutable_parameter_block_sizes()->push_back(6);    // Control pose i-1 has 6 parameters
+    mutable_parameter_block_sizes()->push_back(6);    // Control pose i-2 has 6 parameters
+    mutable_parameter_block_sizes()->push_back(6);    // Control pose i-3 has 6 parameters
+    //mutable_parameter_block_sizes()->push_back(9);  // Camera intrinsics has 9 parameters 
+    //mutable_parameter_block_sizes()->push_back(6);  // Camera extrinsics has 6 parameters 
+    //mutable_parameter_block_sizes()->push_back(1);  // Camera timedelay has 1 parameters 
+    
+    return true;
+  }
+  
+  // Evaluate function for ceres solver
+  virtual bool Evaluate(
+      double const* const* parameters,
+      double* residuals,
+      double** jacobians) const {
+    
+    // Mapping residuals and parameters to matrices
+    MapVectorXd         residual(residuals, num_residuals_);
+    MapConstVector6d    dp0(parameters[0]);   // Change in control pose [i]
+    MapConstVector6d    dp1(parameters[1]);   // Change in control pose [i-1]
+    MapConstVector6d    dp2(parameters[2]);   // Change in control pose [i-2]
+    MapConstVector6d    dp3(parameters[3]);   // Change in control pose [i-3]
+    //MapConstVector9d    dintrinsics(parameters[1]);
+    //MapConstVector6d    dextrinsics(parameters[2]);
+    //MapConstVector1d    dtimedelay(parameters[3]);
+    
+    // Calculate residual from the error states using linearized model
+    residual = residual_
+               + dcorner_dp0_*dp0
+               + dcorner_dp1_*dp1
+               + dcorner_dp2_*dp2
+               + dcorner_dp3_*dp3;
+               //+ dcorner_dintrinsics_ * dintrinsics
+               //+ dcorner_dextrinsics_ * dextrinsics
+               //+ dcorner_dtimedelay_ * dtimedelay;
+    
+    // First estimates Jacobians are used as this shown to keep the estimator consistent
+    if (jacobians != NULL) {
+      if (jacobians[0] != NULL) {
+        MapMatrixXxYRowd jac(jacobians[0], num_residuals_, 6);
+        jac = dcorner_dp0_;
+      }
+      if (jacobians[1] != NULL) {
+        MapMatrixXxYRowd jac(jacobians[1], num_residuals_, 6);
+        jac = dcorner_dp1_;
+      }
+      if (jacobians[2] != NULL) {
+        MapMatrixXxYRowd jac(jacobians[2], num_residuals_, 6);
+        jac = dcorner_dp2_;
+      }
+      if (jacobians[3] != NULL) {
+        MapMatrixXxYRowd jac(jacobians[3], num_residuals_, 6);
+        jac = dcorner_dp3_;
+      }
+      //if (jacobians[1] != NULL) {
+      //  Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>>
+      //      jac(jacobians[1], num_residuals_, 9);
+      //  jac = dcorner_dintrinsics_;
+      ///}
+      //if (jacobians[2] != NULL) {
+      //  Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>>
+      //      jac(jacobians[2], num_residuals_, 6);
+      //  jac = dcorner_dextrinsics_;
+      ///}
+      //if (jacobians[3] != NULL) {
+      //  Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>>
+      //      jac(jacobians[3], num_residuals_, 1);
+      //  jac = dcorner_dtimedelay_;
+      ///}
+    }
+    
+    return true;
+  }
+
+  // Add this residual to a problem
+  bool AddToProblem(ceres::Problem *problem, ceres::LossFunction* loss_func = nullptr) {
+    // Check integrity of data
+    if (!p0_ || !p1_ || !p2_ || !p3_) {LOG(ERROR) << "!p0_ || !p1_ || !p2_ || !p3_"; return false;}
+    int num_zero_jacobians = 0;
+    if (dcorner_dp0_.isZero()) {
+      VLOG(2) << "dcorner_dp0_.isZero() ts " << timestamp_ << " p0 ts " << p0_->Timestamp(); num_zero_jacobians++;}
+    if (dcorner_dp1_.isZero()) {
+      VLOG(2) << "dcorner_dp1_.isZero() ts " << timestamp_ << " p1 ts " << p1_->Timestamp(); num_zero_jacobians++;}
+    if (dcorner_dp2_.isZero()) {
+      VLOG(2) << "dcorner_dp2_.isZero() ts " << timestamp_ << " p2 ts " << p2_->Timestamp(); num_zero_jacobians++;}
+    if (dcorner_dp3_.isZero()) {
+      VLOG(2) << "dcorner_dp3_.isZero() ts " << timestamp_ << " p3 ts " << p3_->Timestamp(); num_zero_jacobians++;}
+    if (num_zero_jacobians > 1) {
+      LOG(ERROR) << "Found more than one zero jacobian for the pose residual. Usually there is only one.";
+      LOG(ERROR) << dcorner_dp0_ << "\n" << dcorner_dp1_ << "\n" << dcorner_dp2_ << "\n" << dcorner_dp3_;
+      // return false; // Should we return false here? **CHECK**
+    }
+    
+    // Check if this residual is already added to the problem
+    //std::vector<ceres::ResidualBlockId> residual_blocks;
+    //problem->GetResidualBlocks(&residual_blocks);
+    //VLOG(1) << "Problem has " << residual_blocks.size() << " residual blocks.";
+    //for (int i=0; i<residual_blocks.size(); i++) {
+    //  if (problem->GetCostFunctionForResidualBlock(residual_blocks.at(i)) == this) {
+    //    LOG(FATAL) << "this cost function has already been added to this problem!";
+    //  }
+    ///}
+    
+    // Add the residual to problem
+    ceres::CostFunction* cf = this;
+    problem->AddResidualBlock(
+      cf, loss_func,
+      p0_->error_.data(),           // 6d
+      p1_->error_.data(),           // 6d
+      p2_->error_.data(),           // 6d
+      p3_->error_.data()            // 6d
+    );
+    
+    // Report
+    VLOG(2) << "Added pose residual to problem " << timestamp_ << " control points: "
+        << p0_->Timestamp() << " " << p1_->Timestamp() << " "
+        << p2_->Timestamp() << " " << p3_->Timestamp();
+    
+    return true;
+  }
+  
+  // Mark p0 as constant on the problem
+  bool MarkStartingControlPoseConstant(ceres::Problem* problem) {
+    if (problem->HasParameterBlock(p3_->error_.data()))
+      problem->SetParameterBlockConstant(p3_->error_.data());    
+    return true;
+  }
+  
+  // Mark all states constant on the problem
+  bool MarkAllControlPosesConstant(ceres::Problem* problem) {
+    if (problem->HasParameterBlock(p0_->error_.data()))
+      problem->SetParameterBlockConstant(p0_->error_.data());    
+    if (problem->HasParameterBlock(p1_->error_.data()))
+      problem->SetParameterBlockConstant(p1_->error_.data());    
+    if (problem->HasParameterBlock(p2_->error_.data()))
+      problem->SetParameterBlockConstant(p2_->error_.data());    
+    if (problem->HasParameterBlock(p3_->error_.data()))
+      problem->SetParameterBlockConstant(p3_->error_.data());    
+    return true;
+  }
+  
+  int64_t EarliestControlPoseTimestamp() const {
+    if (!p3_) return 0;
+    return p3_->Timestamp();
+  }
+  
+  // Removes the control pose errors from residual.
+  //  This is done at starting to address existing errors in control poses
+  bool RemovePoseErrors() {
+    residual_ += (-dcorner_dp0_*p0_->error_ - dcorner_dp1_*p1_->error_
+                  -dcorner_dp2_*p2_->error_ - dcorner_dp3_*p3_->error_);
+    return true;
+  }
+
+  // Adds the control pose errors to residual.
+  //  This is done before control pose errors are set to zero.
+  bool ConsumePoseErrors() {
+    residual_ += ( dcorner_dp0_*p0_->error_ + dcorner_dp1_*p1_->error_
+                  +dcorner_dp2_*p2_->error_ + dcorner_dp3_*p3_->error_);
+    return true;
+  }
+
+  // Accessor for the starting target pose estimate
+  const PoseState& StartingTargetPose() const {
+    return target_pose_est_;
+  }
+  
+  const PoseState& Observation() const {
+    return observation_;
+  }
+  
+};  // PoseSpline_CalibrationTargetViewResidual
+
+
+// Extrinsics calibration between two cameras
+//  One reference camera produces poses of a target at wall-timestamps
+//  Second camera produces poses of the same target at same wall-timestamps
+//    also produces jacobian of the poses wrt time
+// We want to guess the relative pose and time delay of the second camera wrt first one
+//  Residual gets two pose states one for each camera, checks that they have the same timestamp
+//  Jacobian wrt time for second camera is also provided, should not be zero
+//  Residual is defined as the difference 
 
 
 /** Message filters */
