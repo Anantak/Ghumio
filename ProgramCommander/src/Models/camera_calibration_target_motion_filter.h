@@ -805,7 +805,6 @@ class CameraCalibrationTargetMotionFilter : public Model {
     return true;
   }
   
-  
   bool CalculateApproxTargetPose(const anantak::SensorMsg& msg, PoseState* pose) {
     if (!IsValidTargetViewObservation(msg)) {
       VLOG(2) << "Skipping message, it is invalid or is not processed by this filter.";
@@ -821,7 +820,6 @@ class CameraCalibrationTargetMotionFilter : public Model {
     
     return true;
   }
-  
   
   // Check if message has a header, has an AprilMessage, and camera is processed by this filter
   bool IsValidTargetViewObservation(const anantak::SensorMsg& msg) {

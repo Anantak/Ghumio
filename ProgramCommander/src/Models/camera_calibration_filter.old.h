@@ -558,9 +558,6 @@ class CameraIntrinsicsFilter : public anantak::Model {
   bool InitiateFilter() {
     LOG(INFO) << "Creating camera intrinsics filter";
     
-    // Memory allocation
-    AllocateMemory();
-    
     // Helpers
     inter_state_interval_ = 1000000 / options_.states_frequency;
     
@@ -655,6 +652,9 @@ class CameraIntrinsicsFilter : public anantak::Model {
     }
     VLOG(1) << "Iteration interval: " << iteration_interval_;
     
+    // Memory allocation
+    AllocateMemory();
+    
     // Initialize states
     SetStartingStates();
     return true;
@@ -686,6 +686,22 @@ class CameraIntrinsicsFilter : public anantak::Model {
     std::unique_ptr<anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>> view_queue_ptr(
         new anantak::TimedCircularQueue<anantak::DynamicAprilTagViewResidual>(num_tag_views_to_keep));
     tag_view_residuals_ = std::move(view_queue_ptr);
+    
+    // Setup the counters
+    // Add counters
+    iteration_record_.iteration_counters["TargetObservations"] = 0;   // Number of target observations created
+    
+    iteration_record_.iteration_counters["SplinePoseResidualsCreated"] = 0; // Number of residuals created
+    iteration_record_.iteration_counters["SplinePoseResidualsAdded"] = 0;   // Number of residuals added to problem
+    
+    iteration_record_.iteration_counters["SplineControlPosesMarked"] = 0;  // Number of control poses marked constant
+    iteration_record_.iteration_counters["SplineControlPosesRecalculated"] = 0;  // Number of control poses recalculated
+    
+    iteration_record_.iteration_counters["SplinePosePriorsCreated"] = 0;
+    iteration_record_.iteration_counters["SplinePosePriorsAdded"] = 0;
+    iteration_record_.iteration_counters["SplinePosePriorsMarked"] = 0;
+    
+    iteration_record_.algorithm_counters["ProblemObjects"] = 0;   // Number of problem object created
     
     return true;
   }

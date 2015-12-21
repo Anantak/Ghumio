@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
   VLOG(1) << "Setup file = " << programs_setup_filename;
   VLOG(1) << "Component name = " << component_name;
 
-  //// Instantiate a scene to be dispayed
+  //// Instantiate a scene to be displayed
   //anantak::Scene scene;
   //// Create the scene
   //scene.LoadPosesFromFile("data/test_kinematic_states.pb.data");
